@@ -7,79 +7,72 @@ import {
   TouchableOpacity,
   Modal,
   ScrollView,
-  Dimensions,
-  ActivityIndicator,
-  TextInput  // ← AGREGADO
+  TextInput,
+  ActivityIndicator
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { CameraView, useCameraPermissions } from 'expo-camera';
-import * as Location from 'expo-location';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import axios from 'axios';
 
-const { width, height } = Dimensions.get('window');
-
-// Configuración del servidor Django - CAMBIADA CON TU IP
-const API_BASE_URL = 'http://192.168.96.36:8000/api';
+const API_BASE_URL = 'http://192.168.18.124:8000/api';
 
 interface Employee {
   id: string;
   name: string;
   employee_id: string;
-  department: string;
-  position: string;
 }
 
 interface AttendanceRecord {
   id: string;
   employee_name: string;
-  employee_id: string;
   attendance_type: string;
   timestamp: string;
   confidence_percentage: string;
 }
 
 export default function App() {
-  // Estados principales
   const [currentUser, setCurrentUser] = useState<Employee | null>(null);
   const [attendanceHistory, setAttendanceHistory] = useState<AttendanceRecord[]>([]);
-  const [loading, setLoading] = useState(false);
-
-  // Estados de cámara
+  const [employees, setEmployees] = useState<Employee[]>([]);
+  
   const [permission, requestPermission] = useCameraPermissions();
   const [showCamera, setShowCamera] = useState(false);
-  const [showRegistration, setShowRegistration] = useState(false);
-  const [attendanceType, setAttendanceType] = useState<'entrada' | 'salida'>('entrada');
-
-  // Estados de registro
-  const [registrationData, setRegistrationData] = useState({
-    name: '',
-    employee_id: '',
-    department: '',
-    position: ''
-  });
+  const [cameraMode, setCameraMode] = useState<'register' | 'entrada' | 'salida'>('entrada');
+  
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [processingStatus, setProcessingStatus] = useState('');
+  const [attemptCount, setAttemptCount] = useState(0);
+  
+  const [employeeName, setEmployeeName] = useState('');
   const [showRegistrationForm, setShowRegistrationForm] = useState(false);
+  const [showEmployeeList, setShowEmployeeList] = useState(false);
 
   const cameraRef = useRef<CameraView>(null);
+  const processTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     loadStoredData();
+    loadEmployees();
   }, []);
+
+  useEffect(() => {
+    if (showCamera) {
+      startUltraFastProcessing();
+    } else {
+      stopProcessing();
+    }
+    return () => stopProcessing();
+  }, [showCamera]);
 
   const loadStoredData = async () => {
     try {
       const storedUser = await AsyncStorage.getItem('currentUser');
       const storedHistory = await AsyncStorage.getItem('attendanceHistory');
       
-      if (storedUser) {
-        setCurrentUser(JSON.parse(storedUser));
-      }
-      
-      if (storedHistory) {
-        setAttendanceHistory(JSON.parse(storedHistory));
-      }
+      if (storedUser) setCurrentUser(JSON.parse(storedUser));
+      if (storedHistory) setAttendanceHistory(JSON.parse(storedHistory));
     } catch (error) {
-      console.error('Error loading stored data:', error);
+      console.error('Error loading data:', error);
     }
   };
 
@@ -87,140 +80,175 @@ export default function App() {
     try {
       await AsyncStorage.setItem(key, JSON.stringify(data));
     } catch (error) {
-      console.error('Error saving to storage:', error);
+      console.error('Error saving data:', error);
     }
   };
 
-  const takePictureAndProcess = async (isRegistration: boolean = false) => {
-    if (!cameraRef.current) return;
-
+  const loadEmployees = async () => {
     try {
-      setLoading(true);
-
-      // Tomar foto
-      const photo = await cameraRef.current.takePictureAsync({
-        quality: 0.8,
-        base64: true,
-      });
-
-      if (!photo || !photo.base64) {
-        Alert.alert('Error', 'No se pudo capturar la imagen');
-        return;
+      const response = await fetch(`${API_BASE_URL}/employees/`);
+      const data = await response.json();
+      if (data.success) {
+        setEmployees(data.employees);
       }
-
-      // Obtener ubicación
-      let location = null;
-      try {
-        const { status } = await Location.requestForegroundPermissionsAsync();
-        if (status === 'granted') {
-          const locationData = await Location.getCurrentPositionAsync({
-            accuracy: Location.Accuracy.High,
-          });
-          location = {
-            latitude: locationData.coords.latitude,
-            longitude: locationData.coords.longitude,
-          };
-        }
-      } catch (locationError) {
-        console.warn('Error getting location:', locationError);
-      }
-
-      const base64Image = `data:image/jpeg;base64,${photo.base64}`;
-
-      if (isRegistration) {
-        await registerEmployee(base64Image);
-      } else {
-        await verifyAttendance(base64Image, location);
-      }
-
     } catch (error) {
-      console.error('Error processing image:', error);
-      Alert.alert('Error', 'Error procesando la imagen');
-    } finally {
-      setLoading(false);
+      console.error('Error loading employees:', error);
     }
   };
 
-  const registerEmployee = async (base64Image: string) => {
+  const startUltraFastProcessing = () => {
+    console.log('⚡ Iniciando procesamiento ultra rápido para cámara mala');
+    setIsProcessing(true);
+    setAttemptCount(0);
+    setProcessingStatus('Preparando cámara mala...');
+    
+    // Dar tiempo mínimo para estabilizar
+    setTimeout(() => {
+      setProcessingStatus('⚡ Procesando con cámara básica...');
+      processFrame();
+    }, 1500);
+  };
+
+  const stopProcessing = () => {
+    if (processTimeoutRef.current) {
+      clearTimeout(processTimeoutRef.current);
+      processTimeoutRef.current = null;
+    }
+    setIsProcessing(false);
+    setAttemptCount(0);
+  };
+
+  const processFrame = async () => {
+    if (!cameraRef.current || !isProcessing) return;
+
     try {
-      const response = await axios.post(`${API_BASE_URL}/register-employee/`, {
-        name: registrationData.name,
-        employee_id: registrationData.employee_id,
-        email: `${registrationData.employee_id}@company.com`,
-        department: registrationData.department || 'General',
-        position: registrationData.position || 'Empleado',
-        image: base64Image,
+      setAttemptCount(prev => prev + 1);
+      setProcessingStatus(`⚡ Intento ${attemptCount + 1} - Cámara mala`);
+
+      // Captura súper optimizada para cámaras malas
+      const photo = await cameraRef.current.takePictureAsync({
+        quality: 0.05, // SÚPER baja para cámaras malas
+        base64: true,
+        skipProcessing: true,
       });
 
-      if (response.data.success) {
+      if (photo?.base64) {
+        const base64Image = `data:image/jpeg;base64,${photo.base64}`;
+        
+        if (cameraMode === 'register') {
+          await processUltraFastRegistration(base64Image);
+        } else {
+          await processUltraFastVerification(base64Image);
+        }
+      }
+    } catch (error) {
+      console.warn('Error processing frame:', error);
+      setProcessingStatus('❌ Error, reintentando...');
+      
+      // Reintentar después de error
+      processTimeoutRef.current = setTimeout(processFrame, 2000);
+    }
+  };
+
+  const processUltraFastRegistration = async (base64Image: string) => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/ultra-fast-register/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: employeeName.trim(),
+          image: base64Image,
+          ultra_fast: true,
+          attempt: attemptCount
+        })
+      });
+
+      const data = await response.json();
+
+      if (data.success) {
+        stopProcessing();
+        setProcessingStatus('✅ ¡Registrado exitosamente!');
+        
+        // Actualizar lista de empleados
+        await loadEmployees();
+        
         Alert.alert(
-          'Registro Exitoso',
-          `${registrationData.name} ha sido registrado correctamente`,
+          'Registro Completado',
+          `${employeeName} registrado con éxito`,
           [{ text: 'OK', onPress: () => {
-            setShowRegistration(false);
+            setShowCamera(false);
             setShowRegistrationForm(false);
-            setRegistrationData({ name: '', employee_id: '', department: '', position: '' });
+            setEmployeeName('');
           }}]
         );
+      } else if (data.processing) {
+        setProcessingStatus(`⚡ ${data.message}`);
+        // Continuar procesando
+        processTimeoutRef.current = setTimeout(processFrame, 1000);
       } else {
-        Alert.alert('Error de Registro', response.data.message);
+        setProcessingStatus('❌ Error registrando');
+        processTimeoutRef.current = setTimeout(processFrame, 2000);
       }
     } catch (error) {
-      console.error('Registration error:', error);
-      Alert.alert('Error', 'Error conectando con el servidor');
+      setProcessingStatus('❌ Error conexión');
+      processTimeoutRef.current = setTimeout(processFrame, 2000);
     }
   };
 
-  const verifyAttendance = async (base64Image: string, location: any) => {
+  const processUltraFastVerification = async (base64Image: string) => {
     try {
-      const requestData: any = {
-        image: base64Image,
-        type: attendanceType,
-      };
+      const response = await fetch(`${API_BASE_URL}/ultra-fast-verify/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          image: base64Image,
+          type: cameraMode,
+          ultra_fast: true,
+          attempt: attemptCount
+        })
+      });
 
-      if (location) {
-        requestData.latitude = location.latitude;
-        requestData.longitude = location.longitude;
-      }
+      const data = await response.json();
 
-      const response = await axios.post(`${API_BASE_URL}/verify-attendance/`, requestData);
-
-      if (response.data.success) {
-        const { employee, attendance } = response.data;
+      if (data.success) {
+        stopProcessing();
+        const { employee, attendance } = data;
         
-        // Actualizar usuario actual
+        setProcessingStatus(`✅ ¡${employee.name}!`);
         setCurrentUser(employee);
         saveToStorage('currentUser', employee);
 
-        // Agregar al historial
         const newRecord: AttendanceRecord = {
           id: attendance.id,
           employee_name: employee.name,
-          employee_id: employee.employee_id,
           attendance_type: attendance.type,
           timestamp: new Date(attendance.timestamp).toLocaleString('es-CL'),
           confidence_percentage: attendance.confidence,
         };
 
-        const updatedHistory = [newRecord, ...attendanceHistory].slice(0, 50);
+        const updatedHistory = [newRecord, ...attendanceHistory].slice(0, 20);
         setAttendanceHistory(updatedHistory);
         saveToStorage('attendanceHistory', updatedHistory);
 
         Alert.alert(
-          'Asistencia Registrada',
-          `${employee.name}\n${attendance.type.toUpperCase()}\nConfianza: ${attendance.confidence}\n${newRecord.timestamp}`,
+          'Reconocido',
+          `¡Hola ${employee.name}!\n${attendance.type.toUpperCase()} registrada`,
           [{ text: 'OK', onPress: () => setShowCamera(false) }]
         );
+      } else if (data.processing) {
+        setProcessingStatus(`⚡ ${data.message}`);
+        processTimeoutRef.current = setTimeout(processFrame, 1000);
       } else {
-        Alert.alert('Acceso Denegado', response.data.message);
+        setProcessingStatus('❌ No reconocido');
+        processTimeoutRef.current = setTimeout(processFrame, 2000);
       }
     } catch (error) {
-      console.error('Verification error:', error);
-      Alert.alert('Error', 'Error conectando con el servidor');
+      setProcessingStatus('❌ Error conexión');
+      processTimeoutRef.current = setTimeout(processFrame, 2000);
     }
   };
 
-  const startCamera = async (type: 'entrada' | 'salida') => {
+  const startCamera = async (mode: 'entrada' | 'salida') => {
     if (!permission?.granted) {
       const result = await requestPermission();
       if (!result.granted) {
@@ -228,52 +256,68 @@ export default function App() {
         return;
       }
     }
-
-    setAttendanceType(type);
+    setCameraMode(mode);
     setShowCamera(true);
   };
 
-  const startRegistration = async () => {
-    if (!permission?.granted) {
-      const result = await requestPermission();
-      if (!result.granted) {
-        Alert.alert('Permiso requerido', 'Se necesita acceso a la cámara');
-        return;
-      }
-    }
-
+  const startRegistration = () => {
     setShowRegistrationForm(true);
   };
 
   const proceedWithRegistration = () => {
-    // Validación mejorada
-    const { name, employee_id, department, position } = registrationData;
-    
-    if (!name.trim()) {
-      Alert.alert('Error', 'El nombre es obligatorio');
+    if (!employeeName.trim() || employeeName.length < 2) {
+      Alert.alert('Error', 'Ingrese un nombre válido');
       return;
     }
-    
-    if (!employee_id.trim()) {
-      Alert.alert('Error', 'El ID del empleado es obligatorio');
-      return;
-    }
-    
-    if (employee_id.length < 3) {
-      Alert.alert('Error', 'El ID del empleado debe tener al menos 3 caracteres');
-      return;
-    }
-    
-    // Asignar valores por defecto si están vacíos
-    const updatedData = {
-      ...registrationData,
-      department: department.trim() || 'General',
-      position: position.trim() || 'Empleado'
-    };
-    
-    setRegistrationData(updatedData);
     setShowRegistrationForm(false);
-    setShowRegistration(true);
+    setCameraMode('register');
+    setShowCamera(true);
+  };
+
+  const deleteEmployee = async (employee: Employee) => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/delete-employee/${employee.id}/`, {
+        method: 'DELETE',
+      });
+
+      const data = await response.json();
+      if (data.success) {
+        await loadEmployees();
+        Alert.alert('Eliminado', `${employee.name} eliminado del sistema`);
+      } else {
+        Alert.alert('Error', data.message || 'Error eliminando empleado');
+      }
+    } catch (error) {
+      Alert.alert('Error', 'Error conectando con servidor');
+    }
+  };
+
+  const confirmDeleteEmployee = (employee: Employee) => {
+    Alert.alert(
+      'Eliminar Empleado',
+      `¿Eliminar a ${employee.name} del sistema?`,
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        { text: 'Eliminar', style: 'destructive', onPress: () => deleteEmployee(employee) }
+      ]
+    );
+  };
+
+  const deleteAttendanceRecord = async (recordId: string) => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/delete-attendance/${recordId}/`, {
+        method: 'DELETE',
+      });
+
+      if (response.ok) {
+        const updatedHistory = attendanceHistory.filter(record => record.id !== recordId);
+        setAttendanceHistory(updatedHistory);
+        saveToStorage('attendanceHistory', updatedHistory);
+        Alert.alert('Eliminado', 'Registro eliminado');
+      }
+    } catch (error) {
+      Alert.alert('Error', 'Error eliminando registro');
+    }
   };
 
   return (
@@ -282,40 +326,36 @@ export default function App() {
       
       {/* Header */}
       <View style={styles.header}>
-        <Text style={styles.title}>Sistema de Asistencia</Text>
-        <Text style={styles.subtitle}>Reconocimiento Facial con IA</Text>
+        <Text style={styles.title}>⚡ Sistema Ultra Rápido</Text>
+        <Text style={styles.subtitle}>Optimizado para Cámaras Malas</Text>
       </View>
 
-      {/* Estado del usuario */}
+      {/* Usuario actual */}
       <View style={styles.userSection}>
         {currentUser ? (
-          <View style={styles.userInfo}>
-            <Text style={styles.userName}>{currentUser.name}</Text>
-            <Text style={styles.userDetails}>
-              ID: {currentUser.employee_id} | {currentUser.department}
-            </Text>
-            <Text style={styles.userPosition}>{currentUser.position}</Text>
-          </View>
+          <Text style={styles.userName}>👤 {currentUser.name}</Text>
         ) : (
-          <Text style={styles.noUserText}>No hay usuario activo</Text>
+          <Text style={styles.noUserText}>⚡ Sistema listo</Text>
         )}
       </View>
 
       {/* Botones principales */}
       <View style={styles.buttonSection}>
-        <TouchableOpacity
-          style={[styles.button, styles.entradaButton]}
-          onPress={() => startCamera('entrada')}
-        >
-          <Text style={styles.buttonText}>📷 ENTRADA</Text>
-        </TouchableOpacity>
+        <View style={styles.buttonRow}>
+          <TouchableOpacity
+            style={[styles.button, styles.entradaButton]}
+            onPress={() => startCamera('entrada')}
+          >
+            <Text style={styles.buttonText}>⚡ ENTRADA</Text>
+          </TouchableOpacity>
 
-        <TouchableOpacity
-          style={[styles.button, styles.salidaButton]}
-          onPress={() => startCamera('salida')}
-        >
-          <Text style={styles.buttonText}>📷 SALIDA</Text>
-        </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.button, styles.salidaButton]}
+            onPress={() => startCamera('salida')}
+          >
+            <Text style={styles.buttonText}>⚡ SALIDA</Text>
+          </TouchableOpacity>
+        </View>
 
         <TouchableOpacity
           style={[styles.button, styles.registerButton]}
@@ -323,73 +363,60 @@ export default function App() {
         >
           <Text style={styles.buttonText}>👤 REGISTRAR EMPLEADO</Text>
         </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[styles.button, styles.employeeListButton]}
+          onPress={() => setShowEmployeeList(true)}
+        >
+          <Text style={styles.buttonText}>📋 EMPLEADOS ({employees.length})</Text>
+        </TouchableOpacity>
       </View>
 
       {/* Historial */}
       <View style={styles.historySection}>
-        <Text style={styles.historyTitle}>Historial Reciente</Text>
+        <Text style={styles.historyTitle}>📋 Últimos Registros</Text>
         <ScrollView style={styles.historyList}>
           {attendanceHistory.slice(0, 5).map((record) => (
             <View key={record.id} style={styles.historyItem}>
-              <Text style={styles.historyName}>{record.employee_name}</Text>
-              <Text style={styles.historyDetails}>
-                {record.attendance_type.toUpperCase()} | {record.confidence_percentage}
-              </Text>
-              <Text style={styles.historyTime}>{record.timestamp}</Text>
+              <View style={styles.historyContent}>
+                <Text style={styles.historyName}>{record.employee_name}</Text>
+                <Text style={styles.historyDetails}>
+                  {record.attendance_type.toUpperCase()} | {record.confidence_percentage}
+                </Text>
+                <Text style={styles.historyTime}>{record.timestamp}</Text>
+              </View>
+              <TouchableOpacity
+                style={styles.deleteButton}
+                onPress={() => deleteAttendanceRecord(record.id)}
+              >
+                <Text style={styles.deleteButtonText}>🗑</Text>
+              </TouchableOpacity>
             </View>
           ))}
-          {attendanceHistory.length === 0 && (
-            <Text style={styles.noHistoryText}>No hay registros aún</Text>
-          )}
         </ScrollView>
       </View>
 
-      {/* Modal de formulario de registro - CORREGIDO */}
+      {/* Modal de registro */}
       <Modal visible={showRegistrationForm} animationType="slide" transparent>
         <View style={styles.modalOverlay}>
           <View style={styles.formContainer}>
-            <Text style={styles.formTitle}>Nuevo Empleado</Text>
+            <Text style={styles.formTitle}>👤 Registro Rápido</Text>
             
-            <Text style={styles.inputLabel}>Nombre completo:</Text>
             <TextInput
               style={styles.textInput}
-              value={registrationData.name}
-              onChangeText={(text) => setRegistrationData({...registrationData, name: text})}
-              placeholder="Ingrese nombre completo"
-              placeholderTextColor="#999"
-            />
-            
-            <Text style={styles.inputLabel}>ID Empleado:</Text>
-            <TextInput
-              style={styles.textInput}
-              value={registrationData.employee_id}
-              onChangeText={(text) => setRegistrationData({...registrationData, employee_id: text})}
-              placeholder="Ingrese ID del empleado"
-              placeholderTextColor="#999"
-            />
-            
-            <Text style={styles.inputLabel}>Departamento:</Text>
-            <TextInput
-              style={styles.textInput}
-              value={registrationData.department}
-              onChangeText={(text) => setRegistrationData({...registrationData, department: text})}
-              placeholder="Ej: Recursos Humanos"
-              placeholderTextColor="#999"
-            />
-            
-            <Text style={styles.inputLabel}>Cargo:</Text>
-            <TextInput
-              style={styles.textInput}
-              value={registrationData.position}
-              onChangeText={(text) => setRegistrationData({...registrationData, position: text})}
-              placeholder="Ej: Desarrollador Senior"
-              placeholderTextColor="#999"
+              value={employeeName}
+              onChangeText={setEmployeeName}
+              placeholder="Nombre del empleado"
+              autoFocus
             />
 
             <View style={styles.formButtons}>
               <TouchableOpacity
                 style={[styles.button, styles.cancelButton]}
-                onPress={() => setShowRegistrationForm(false)}
+                onPress={() => {
+                  setShowRegistrationForm(false);
+                  setEmployeeName('');
+                }}
               >
                 <Text style={styles.buttonText}>Cancelar</Text>
               </TouchableOpacity>
@@ -398,25 +425,60 @@ export default function App() {
                 style={[styles.button, styles.confirmButton]}
                 onPress={proceedWithRegistration}
               >
-                <Text style={styles.buttonText}>Continuar</Text>
+                <Text style={styles.buttonText}>⚡ Registrar</Text>
               </TouchableOpacity>
             </View>
           </View>
         </View>
       </Modal>
 
-      {/* Modal de cámara */}
-      <Modal visible={showCamera || showRegistration} animationType="slide">
+      {/* Lista de empleados */}
+      <Modal visible={showEmployeeList} animationType="slide">
+        <View style={styles.employeeListContainer}>
+          <View style={styles.employeeListHeader}>
+            <Text style={styles.employeeListTitle}>📋 Empleados Registrados</Text>
+            <TouchableOpacity
+              onPress={() => setShowEmployeeList(false)}
+              style={styles.closeButton}
+            >
+              <Text style={styles.closeButtonText}>✕</Text>
+            </TouchableOpacity>
+          </View>
+
+          <ScrollView style={styles.employeeList}>
+            {employees.map((employee) => (
+              <View key={employee.id} style={styles.employeeItem}>
+                <View style={styles.employeeInfo}>
+                  <Text style={styles.employeeName}>{employee.name}</Text>
+                  <Text style={styles.employeeId}>{employee.employee_id}</Text>
+                </View>
+                <TouchableOpacity
+                  style={styles.deleteEmployeeButton}
+                  onPress={() => confirmDeleteEmployee(employee)}
+                >
+                  <Text style={styles.deleteButtonText}>🗑</Text>
+                </TouchableOpacity>
+              </View>
+            ))}
+            {employees.length === 0 && (
+              <Text style={styles.noEmployeesText}>No hay empleados registrados</Text>
+            )}
+          </ScrollView>
+        </View>
+      </Modal>
+
+      {/* Cámara ultra rápida */}
+      <Modal visible={showCamera} animationType="slide">
         <View style={styles.cameraContainer}>
           <View style={styles.cameraHeader}>
             <Text style={styles.cameraTitle}>
-              {showRegistration ? 'Registro Facial' : `Verificación - ${attendanceType.toUpperCase()}`}
+              {cameraMode === 'register' ? 
+                `⚡ Registrando: ${employeeName}` : 
+                `⚡ ${cameraMode.toUpperCase()}`
+              }
             </Text>
             <TouchableOpacity
-              onPress={() => {
-                setShowCamera(false);
-                setShowRegistration(false);
-              }}
+              onPress={() => setShowCamera(false)}
               style={styles.closeButton}
             >
               <Text style={styles.closeButtonText}>✕</Text>
@@ -430,27 +492,22 @@ export default function App() {
           />
 
           <View style={styles.cameraOverlay}>
-            <View style={styles.faceFrame} />
-            <Text style={styles.instructionText}>
-              {showRegistration
-                ? 'Posiciona tu rostro en el marco para registrarte'
-                : 'Posiciona tu rostro en el marco para verificar asistencia'
-              }
-            </Text>
+            <View style={styles.ultraFastFrame} />
             
-            <TouchableOpacity
-              style={styles.captureButton}
-              onPress={() => takePictureAndProcess(showRegistration)}
-              disabled={loading}
-            >
-              {loading ? (
-                <ActivityIndicator color="#fff" />
-              ) : (
-                <Text style={styles.captureButtonText}>
-                  {showRegistration ? '📸 REGISTRAR' : '📸 VERIFICAR'}
-                </Text>
+            <View style={styles.statusContainer}>
+              <Text style={styles.statusText}>{processingStatus}</Text>
+              {attemptCount > 0 && (
+                <Text style={styles.attemptText}>Intento: {attemptCount}</Text>
               )}
-            </TouchableOpacity>
+              {isProcessing && (
+                <ActivityIndicator color="#e74c3c" size="small" style={styles.spinner} />
+              )}
+            </View>
+            
+            <Text style={styles.instructionText}>
+              ⚡ Sistema ultra rápido para cámaras básicas{'\n'}
+              Mantente frente a la cámara
+            </Text>
           </View>
         </View>
       </Modal>
@@ -459,250 +516,59 @@ export default function App() {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#f5f5f5',
-  },
-  header: {
-    backgroundColor: '#2c3e50',
-    padding: 20,
-    paddingTop: 50,
-    alignItems: 'center',
-  },
-  title: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#fff',
-  },
-  subtitle: {
-    fontSize: 14,
-    color: '#ecf0f1',
-    marginTop: 5,
-  },
-  userSection: {
-    backgroundColor: '#fff',
-    margin: 20,
-    padding: 20,
-    borderRadius: 10,
-    elevation: 3,
-  },
-  userInfo: {
-    alignItems: 'center',
-  },
-  userName: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: '#2c3e50',
-  },
-  userDetails: {
-    fontSize: 14,
-    color: '#7f8c8d',
-    marginTop: 5,
-  },
-  userPosition: {
-    fontSize: 16,
-    color: '#34495e',
-    marginTop: 5,
-  },
-  noUserText: {
-    textAlign: 'center',
-    color: '#7f8c8d',
-    fontStyle: 'italic',
-  },
-  buttonSection: {
-    padding: 20,
-    gap: 15,
-  },
-  button: {
-    padding: 15,
-    borderRadius: 10,
-    alignItems: 'center',
-    elevation: 2,
-  },
-  entradaButton: {
-    backgroundColor: '#27ae60',
-  },
-  salidaButton: {
-    backgroundColor: '#e74c3c',
-  },
-  registerButton: {
-    backgroundColor: '#3498db',
-  },
-  cancelButton: {
-    backgroundColor: '#95a5a6',
-  },
-  confirmButton: {
-    backgroundColor: '#27ae60',
-  },
-  buttonText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: 'bold',
-  },
-  historySection: {
-    flex: 1,
-    margin: 20,
-    backgroundColor: '#fff',
-    borderRadius: 10,
-    padding: 15,
-    elevation: 3,
-  },
-  historyTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#2c3e50',
-    marginBottom: 15,
-  },
-  historyList: {
-    flex: 1,
-  },
-  historyItem: {
-    padding: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: '#ecf0f1',
-  },
-  historyName: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: '#2c3e50',
-  },
-  historyDetails: {
-    fontSize: 12,
-    color: '#7f8c8d',
-    marginTop: 2,
-  },
-  historyTime: {
-    fontSize: 12,
-    color: '#95a5a6',
-    marginTop: 2,
-  },
-  noHistoryText: {
-    textAlign: 'center',
-    color: '#7f8c8d',
-    fontStyle: 'italic',
-    marginTop: 20,
-  },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    justifyContent: 'center',
-    padding: 20,
-  },
-  formContainer: {
-    backgroundColor: '#fff',
-    borderRadius: 15,
-    padding: 25,
-  },
-  formTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    textAlign: 'center',
-    marginBottom: 20,
-    color: '#2c3e50',
-  },
-  inputLabel: {
-    fontSize: 14,
-    color: '#2c3e50',
-    marginBottom: 5,
-    fontWeight: '500',
-  },
-  input: {
-    borderWidth: 1,
-    borderColor: '#ddd',
-    borderRadius: 8,
-    padding: 15,
-    marginBottom: 15,
-    backgroundColor: '#f9f9f9',
-  },
-  inputText: {
-    fontSize: 16,
-    color: '#2c3e50',
-  },
-  textInput: {
-    borderWidth: 1,
-    borderColor: '#ddd',
-    borderRadius: 8,
-    padding: 15,
-    marginBottom: 15,
-    backgroundColor: '#fff',
-    fontSize: 16,
-    color: '#2c3e50',
-  },
-  formButtons: {
-    flexDirection: 'row',
-    gap: 15,
-    marginTop: 20,
-  },
-  cameraContainer: {
-    flex: 1,
-    backgroundColor: '#000',
-  },
-  cameraHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: 20,
-    paddingTop: 50,
-    backgroundColor: 'rgba(0,0,0,0.8)',
-  },
-  cameraTitle: {
-    color: '#fff',
-    fontSize: 18,
-    fontWeight: 'bold',
-    flex: 1,
-  },
-  closeButton: {
-    padding: 10,
-    backgroundColor: 'rgba(255,255,255,0.2)',
-    borderRadius: 20,
-  },
-  closeButtonText: {
-    color: '#fff',
-    fontSize: 18,
-    fontWeight: 'bold',
-  },
-  camera: {
-    flex: 1,
-  },
-  cameraOverlay: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  faceFrame: {
-    width: 250,
-    height: 300,
-    borderWidth: 3,
-    borderColor: '#27ae60',
-    borderRadius: 125,
-    backgroundColor: 'transparent',
-  },
-  instructionText: {
-    color: '#fff',
-    fontSize: 16,
-    textAlign: 'center',
-    marginTop: 20,
-    backgroundColor: 'rgba(0,0,0,0.7)',
-    padding: 15,
-    borderRadius: 10,
-    marginHorizontal: 20,
-  },
-  captureButton: {
-    backgroundColor: '#27ae60',
-    paddingHorizontal: 30,
-    paddingVertical: 15,
-    borderRadius: 25,
-    marginTop: 30,
-    minWidth: 150,
-    alignItems: 'center',
-  },
-  captureButtonText: {
-    color: '#fff',
-    fontSize: 18,
-    fontWeight: 'bold',
-  },
+  container: { flex: 1, backgroundColor: '#f5f5f5' },
+  header: { backgroundColor: '#2c3e50', padding: 20, paddingTop: 50, alignItems: 'center' },
+  title: { fontSize: 24, fontWeight: 'bold', color: '#fff' },
+  subtitle: { fontSize: 14, color: '#ecf0f1', marginTop: 5 },
+  userSection: { backgroundColor: '#fff', margin: 20, padding: 20, borderRadius: 10, elevation: 3 },
+  userName: { fontSize: 20, fontWeight: 'bold', color: '#2c3e50', textAlign: 'center' },
+  noUserText: { textAlign: 'center', color: '#7f8c8d', fontStyle: 'italic', fontSize: 16 },
+  buttonSection: { padding: 20, gap: 15 },
+  buttonRow: { flexDirection: 'row', gap: 15 },
+  button: { padding: 15, borderRadius: 10, alignItems: 'center', elevation: 2 },
+  entradaButton: { backgroundColor: '#27ae60', flex: 1 },
+  salidaButton: { backgroundColor: '#e74c3c', flex: 1 },
+  registerButton: { backgroundColor: '#3498db' },
+  employeeListButton: { backgroundColor: '#9b59b6' },
+  cancelButton: { backgroundColor: '#95a5a6', flex: 1 },
+  confirmButton: { backgroundColor: '#27ae60', flex: 1 },
+  buttonText: { color: '#fff', fontSize: 16, fontWeight: 'bold' },
+  historySection: { flex: 1, margin: 20, backgroundColor: '#fff', borderRadius: 10, padding: 15, elevation: 3 },
+  historyTitle: { fontSize: 18, fontWeight: 'bold', color: '#2c3e50', marginBottom: 15 },
+  historyList: { flex: 1 },
+  historyItem: { flexDirection: 'row', padding: 10, borderBottomWidth: 1, borderBottomColor: '#ecf0f1', alignItems: 'center' },
+  historyContent: { flex: 1 },
+  historyName: { fontSize: 16, fontWeight: 'bold', color: '#2c3e50' },
+  historyDetails: { fontSize: 12, color: '#7f8c8d', marginTop: 2 },
+  historyTime: { fontSize: 12, color: '#95a5a6', marginTop: 2 },
+  deleteButton: { padding: 8, backgroundColor: '#e74c3c', borderRadius: 15, marginLeft: 10 },
+  deleteButtonText: { color: '#fff', fontSize: 14 },
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', padding: 20 },
+  formContainer: { backgroundColor: '#fff', borderRadius: 15, padding: 25 },
+  formTitle: { fontSize: 20, fontWeight: 'bold', textAlign: 'center', marginBottom: 20, color: '#2c3e50' },
+  textInput: { borderWidth: 1, borderColor: '#ddd', borderRadius: 8, padding: 15, marginBottom: 15, fontSize: 16 },
+  formButtons: { flexDirection: 'row', gap: 15, marginTop: 20 },
+  employeeListContainer: { flex: 1, backgroundColor: '#fff' },
+  employeeListHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 20, paddingTop: 50, backgroundColor: '#2c3e50' },
+  employeeListTitle: { color: '#fff', fontSize: 18, fontWeight: 'bold', flex: 1 },
+  closeButton: { padding: 10, backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 20 },
+  closeButtonText: { color: '#fff', fontSize: 18, fontWeight: 'bold' },
+  employeeList: { flex: 1, padding: 20 },
+  employeeItem: { flexDirection: 'row', padding: 15, backgroundColor: '#f8f9fa', borderRadius: 10, marginBottom: 10, alignItems: 'center' },
+  employeeInfo: { flex: 1 },
+  employeeName: { fontSize: 16, fontWeight: 'bold', color: '#2c3e50' },
+  employeeId: { fontSize: 12, color: '#7f8c8d', marginTop: 2 },
+  deleteEmployeeButton: { padding: 10, backgroundColor: '#e74c3c', borderRadius: 15 },
+  noEmployeesText: { textAlign: 'center', color: '#7f8c8d', fontStyle: 'italic', marginTop: 50 },
+  cameraContainer: { flex: 1, backgroundColor: '#000' },
+  cameraHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 20, paddingTop: 50, backgroundColor: 'rgba(0,0,0,0.8)' },
+  cameraTitle: { color: '#fff', fontSize: 18, fontWeight: 'bold', flex: 1 },
+  camera: { flex: 1 },
+  cameraOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, justifyContent: 'center', alignItems: 'center' },
+  ultraFastFrame: { width: 250, height: 300, borderWidth: 3, borderColor: '#e74c3c', borderRadius: 125, backgroundColor: 'transparent' },
+  statusContainer: { backgroundColor: 'rgba(0,0,0,0.9)', paddingHorizontal: 20, paddingVertical: 15, borderRadius: 25, marginTop: 30, alignItems: 'center', minWidth: 250 },
+  statusText: { color: '#fff', fontSize: 16, fontWeight: 'bold', textAlign: 'center' },
+  attemptText: { color: '#e74c3c', fontSize: 12, marginTop: 5 },
+  spinner: { marginTop: 10 },
+  instructionText: { color: '#fff', fontSize: 14, textAlign: 'center', marginTop: 20, backgroundColor: 'rgba(0,0,0,0.7)', padding: 15, borderRadius: 10, marginHorizontal: 20 },
 });

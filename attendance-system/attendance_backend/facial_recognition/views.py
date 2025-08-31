@@ -8,161 +8,162 @@ from datetime import datetime, timedelta
 import json
 import base64
 import io
+import uuid
 from PIL import Image
+import numpy as np
 
 from .models import Employee, FaceEncoding, AttendanceRecord
-from .serializers import EmployeeSerializer, AttendanceRecordSerializer, FaceEncodingSerializer
+from .serializers import EmployeeSerializer, AttendanceRecordSerializer
 from .face_recognition_utils import FaceRecognitionService
-
-# Inicializar servicio de reconocimiento facial
-face_service = FaceRecognitionService()
 
 @api_view(['GET'])
 def health_check(request):
-    """
-    Endpoint de salud para verificar que la API está funcionando
-    """
     return Response({
         'status': 'OK',
-        'message': 'Facial Recognition API is running',
+        'message': 'Sistema ultra rápido para cámaras malas funcionando',
         'timestamp': datetime.now().isoformat()
-    }, status=status.HTTP_200_OK)
+    })
 
 @api_view(['POST'])
-def register_employee_face(request):
+def ultra_fast_register(request):
     """
-    Registra un nuevo empleado con su encoding facial
+    ⚡ REGISTRO ULTRA RÁPIDO - Optimizado para cámaras MUY MALAS
     """
+    print("⚡ REGISTRO ULTRA RÁPIDO PARA CÁMARAS MALAS")
+    
     try:
         data = request.data
+        name = data.get('name', '').strip()
+        image_data = data.get('image')
+        ultra_fast = data.get('ultra_fast', False)
+        attempt = data.get('attempt', 0)
         
-        # Validar datos requeridos
-        required_fields = ['name', 'employee_id', 'email', 'image']
-        for field in required_fields:
-            if not data.get(field):
+        if not name or not image_data or not ultra_fast:
+            return Response({
+                'processing': True,
+                'message': 'Datos incompletos'
+            })
+        
+        print(f"⚡ Intento {attempt} - Registrando: {name}")
+        
+        # Generar ID automático
+        employee_id = f"EMP{str(uuid.uuid4())[:6].upper()}"
+        while Employee.objects.filter(employee_id=employee_id).exists():
+            employee_id = f"EMP{str(uuid.uuid4())[:6].upper()}"
+        
+        # Validación mínima para cámaras malas
+        try:
+            image_bytes = base64.b64decode(image_data.split(',')[1] if ',' in image_data else image_data)
+            image = Image.open(io.BytesIO(image_bytes))
+            
+            if image.width < 20 or image.height < 20:
                 return Response({
-                    'success': False,
-                    'message': f'El campo {field} es requerido'
-                }, status=status.HTTP_400_BAD_REQUEST)
-        
-        # Verificar que el employee_id no exista
-        if Employee.objects.filter(employee_id=data['employee_id']).exists():
+                    'processing': True,
+                    'message': f'Intento {attempt}: Imagen muy pequeña'
+                })
+            
+            print(f"⚡ Imagen válida: {image.width}x{image.height}")
+            
+        except Exception as e:
             return Response({
-                'success': False,
-                'message': f'Ya existe un empleado con ID {data["employee_id"]}'
-            }, status=status.HTTP_400_BAD_REQUEST)
+                'processing': True,
+                'message': f'Intento {attempt}: Imagen corrupta'
+            })
         
-        # Validar calidad de imagen
-        base64_image = data['image']
-        is_valid, validation_message = face_service.validate_image_quality(base64_image)
-        
-        if not is_valid:
-            return Response({
-                'success': False,
-                'message': f'Calidad de imagen insuficiente: {validation_message}'
-            }, status=status.HTTP_400_BAD_REQUEST)
-        
-        # Preprocesar imagen
-        processed_image = face_service.preprocess_image(base64_image)
-        
-        # Generar encoding facial
-        encoding, encoding_message = face_service.encode_face_from_base64(processed_image)
+        # Procesamiento ultra rápido
+        face_service = FaceRecognitionService()
+        encoding, msg = face_service.ultra_fast_encoding(image_data)
         
         if not encoding:
+            print(f"⚡ Sin rostro en intento {attempt}: {msg}")
             return Response({
-                'success': False,
-                'message': f'Error en reconocimiento facial: {encoding_message}'
-            }, status=status.HTTP_400_BAD_REQUEST)
+                'processing': True,
+                'message': f'Intento {attempt}: Buscando rostro...'
+            })
         
-        # Crear usuario y empleado en transacción
+        print(f"⚡ Encoding generado en intento {attempt}")
+        
+        # Guardar inmediatamente
         with transaction.atomic():
-            # Crear usuario Django
             user = User.objects.create_user(
-                username=data['employee_id'],
-                email=data['email'],
-                first_name=data['name'].split()[0],
-                last_name=' '.join(data['name'].split()[1:]) if len(data['name'].split()) > 1 else ''
+                username=employee_id,
+                email=f"{employee_id.lower()}@rapido.com",
+                first_name=name.split()[0],
+                last_name=' '.join(name.split()[1:]) if len(name.split()) > 1 else ''
             )
             
-            # Crear empleado
             employee = Employee.objects.create(
                 user=user,
-                employee_id=data['employee_id'],
-                name=data['name'],
-                email=data['email'],
-                department=data.get('department', 'General'),
-                position=data.get('position', 'Empleado'),
+                employee_id=employee_id,
+                name=name,
+                email=f"{employee_id.lower()}@rapido.com",
+                department='General',
+                position='Empleado',
                 is_active=True
             )
             
-            # Crear encoding facial
-            face_encoding = FaceEncoding.objects.create(
+            FaceEncoding.objects.create(
                 employee=employee,
                 encoding_data=json.dumps(encoding),
                 is_active=True
             )
         
-        # Serializar respuesta
-        employee_data = EmployeeSerializer(employee).data
+        print(f"✅ REGISTRADO ULTRA RÁPIDO: {name} ({employee_id})")
         
         return Response({
             'success': True,
-            'message': f'Empleado {data["name"]} registrado exitosamente',
-            'employee': employee_data,
-            'encoding_id': str(face_encoding.id)
-        }, status=status.HTTP_201_CREATED)
+            'message': f'{name} registrado exitosamente',
+            'employee': {
+                'id': str(employee.id),
+                'name': employee.name,
+                'employee_id': employee.employee_id
+            },
+            'attempt': attempt
+        })
         
     except Exception as e:
+        print(f"❌ Error ultra rápido: {str(e)}")
         return Response({
-            'success': False,
-            'message': f'Error interno del servidor: {str(e)}'
-        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            'processing': True,
+            'message': f'Intento {attempt}: Error procesando'
+        })
 
 @api_view(['POST'])
-def verify_attendance(request):
+def ultra_fast_verify(request):
     """
-    Verifica la asistencia usando reconocimiento facial
+    ⚡ VERIFICACIÓN ULTRA RÁPIDA - Para cámaras MUY MALAS
     """
+    print("⚡ VERIFICACIÓN ULTRA RÁPIDA PARA CÁMARAS MALAS")
+    
     try:
         data = request.data
+        image_data = data.get('image')
+        attendance_type = data.get('type')
+        ultra_fast = data.get('ultra_fast', False)
+        attempt = data.get('attempt', 0)
         
-        # Validar datos requeridos
-        if not data.get('image'):
+        if not image_data or not attendance_type or not ultra_fast:
             return Response({
-                'success': False,
-                'message': 'Se requiere una imagen para verificar'
-            }, status=status.HTTP_400_BAD_REQUEST)
+                'processing': True,
+                'message': 'Datos incompletos'
+            })
         
-        if not data.get('type') or data.get('type') not in ['entrada', 'salida']:
-            return Response({
-                'success': False,
-                'message': 'Tipo de asistencia debe ser "entrada" o "salida"'
-            }, status=status.HTTP_400_BAD_REQUEST)
+        print(f"⚡ Intento {attempt} - Verificando {attendance_type}")
         
-        base64_image = data['image']
-        attendance_type = data['type']
-        
-        # Validar calidad de imagen
-        is_valid, validation_message = face_service.validate_image_quality(base64_image)
-        if not is_valid:
-            return Response({
-                'success': False,
-                'message': f'Calidad de imagen insuficiente: {validation_message}'
-            }, status=status.HTTP_400_BAD_REQUEST)
-        
-        # Preprocesar imagen
-        processed_image = face_service.preprocess_image(base64_image)
-        
-        # Generar encoding de la imagen actual
-        unknown_encoding, encoding_message = face_service.encode_face_from_base64(processed_image)
+        # Procesamiento ultra rápido
+        face_service = FaceRecognitionService()
+        unknown_encoding, msg = face_service.ultra_fast_encoding(image_data)
         
         if not unknown_encoding:
+            print(f"⚡ Sin rostro en intento {attempt}: {msg}")
             return Response({
-                'success': False,
-                'message': f'No se pudo procesar el rostro: {encoding_message}'
-            }, status=status.HTTP_400_BAD_REQUEST)
+                'processing': True,
+                'message': f'Intento {attempt}: Analizando...'
+            })
         
-        # Obtener todos los encodings activos
+        print(f"⚡ Rostro detectado en intento {attempt}")
+        
+        # Obtener empleados
         active_encodings = FaceEncoding.objects.filter(
             is_active=True,
             employee__is_active=True
@@ -171,231 +172,171 @@ def verify_attendance(request):
         if not active_encodings.exists():
             return Response({
                 'success': False,
-                'message': 'No hay empleados registrados en el sistema'
-            }, status=status.HTTP_404_NOT_FOUND)
+                'message': 'No hay empleados registrados'
+            })
         
-        # Buscar mejor coincidencia
+        # Comparación ultra rápida
+        print(f"⚡ Comparando con {active_encodings.count()} empleados...")
         best_match = None
         best_confidence = 0.0
         
         for face_encoding in active_encodings:
             try:
                 stored_encoding = json.loads(face_encoding.encoding_data)
-                is_match, confidence = face_service.compare_faces(
-                    stored_encoding, 
-                    unknown_encoding
-                )
+                confidence = face_service.ultra_fast_compare(stored_encoding, unknown_encoding)
                 
-                if is_match and confidence > best_confidence:
+                print(f"   ⚡ {face_encoding.employee.name}: {confidence:.3f}")
+                
+                if confidence > best_confidence:
                     best_match = face_encoding.employee
                     best_confidence = confidence
                     
-            except Exception as e:
+            except Exception:
                 continue
         
-        # Verificar si se encontró una coincidencia válida
-        if not best_match or best_confidence < 0.6:
-            return Response({
-                'success': False,
-                'message': 'No se reconoció el rostro. Confianza insuficiente.'
-            }, status=status.HTTP_404_NOT_FOUND)
+        # Umbral ultra bajo para cámaras malas
+        MIN_CONFIDENCE = 0.15
         
-        # Verificar reglas de asistencia
+        if not best_match or best_confidence < MIN_CONFIDENCE:
+            print(f"⚡ No reconocido en intento {attempt}: {best_confidence:.3f}")
+            return Response({
+                'processing': True,
+                'message': f'Intento {attempt}: Buscando empleado...'
+            })
+        
+        print(f"✅ RECONOCIDO ULTRA RÁPIDO: {best_match.name} ({best_confidence:.1%})")
+        
+        # Validación básica de reglas
         today = timezone.now().date()
         last_record = AttendanceRecord.objects.filter(
             employee=best_match,
             timestamp__date=today
         ).order_by('-timestamp').first()
         
-        # Validar lógica de entrada/salida
         if attendance_type == 'entrada' and last_record and last_record.attendance_type == 'entrada':
-            # Verificar que no sea muy reciente (evitar duplicados)
-            if (timezone.now() - last_record.timestamp).seconds < 300:  # 5 minutos
+            time_diff = (timezone.now() - last_record.timestamp).seconds
+            if time_diff < 180:  # 3 minutos para ultra rápido
                 return Response({
                     'success': False,
-                    'message': 'Ya registraste entrada recientemente'
-                }, status=status.HTTP_400_BAD_REQUEST)
+                    'message': f'Entrada ya registrada hace {time_diff//60} minutos'
+                })
         
         elif attendance_type == 'salida' and (not last_record or last_record.attendance_type == 'salida'):
             return Response({
                 'success': False,
-                'message': 'Debes registrar entrada antes de la salida'
-            }, status=status.HTTP_400_BAD_REQUEST)
+                'message': 'Registra entrada primero'
+            })
         
-        # Crear registro de asistencia
+        # Registro ultra rápido
         attendance_record = AttendanceRecord.objects.create(
             employee=best_match,
             attendance_type=attendance_type,
             confidence=best_confidence,
-            location_lat=data.get('latitude'),
-            location_lng=data.get('longitude'),
-            notes=f'Reconocimiento automático - Confianza: {best_confidence:.1%}'
+            notes=f'Ultra rápido - Intento {attempt} - {best_confidence:.1%}'
         )
         
-        # Preparar respuesta
-        employee_data = EmployeeSerializer(best_match).data
-        attendance_data = {
-            'id': str(attendance_record.id),
-            'type': attendance_type,
-            'timestamp': attendance_record.timestamp.isoformat(),
-            'confidence': f"{best_confidence:.1%}",
-            'location': {
-                'latitude': attendance_record.location_lat,
-                'longitude': attendance_record.location_lng
-            } if attendance_record.location_lat else None
-        }
+        print(f"✅ ASISTENCIA ULTRA RÁPIDA: {attendance_record.id}")
         
         return Response({
             'success': True,
-            'message': f'Asistencia registrada: {attendance_type.upper()}',
-            'employee': employee_data,
-            'attendance': attendance_data
-        }, status=status.HTTP_201_CREATED)
-        
-    except Exception as e:
-        return Response({
-            'success': False,
-            'message': f'Error interno del servidor: {str(e)}'
-        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-@api_view(['GET'])
-def get_attendance_history(request, employee_id=None):
-    """
-    Obtiene el historial de asistencia
-    """
-    try:
-        # Filtros de query parameters
-        days = int(request.GET.get('days', 30))  # Por defecto últimos 30 días
-        attendance_type = request.GET.get('type')  # entrada/salida
-        limit = int(request.GET.get('limit', 100))  # Máximo registros
-        
-        # Fecha desde
-        date_from = timezone.now().date() - timedelta(days=days)
-        
-        # Query base
-        queryset = AttendanceRecord.objects.filter(
-            timestamp__date__gte=date_from
-        ).select_related('employee')
-        
-        # Filtrar por empleado específico si se proporciona
-        if employee_id:
-            try:
-                employee = Employee.objects.get(id=employee_id)
-                queryset = queryset.filter(employee=employee)
-            except Employee.DoesNotExist:
-                return Response({
-                    'success': False,
-                    'message': 'Empleado no encontrado'
-                }, status=status.HTTP_404_NOT_FOUND)
-        
-        # Filtrar por tipo de asistencia
-        if attendance_type and attendance_type in ['entrada', 'salida']:
-            queryset = queryset.filter(attendance_type=attendance_type)
-        
-        # Aplicar límite y orden
-        records = queryset.order_by('-timestamp')[:limit]
-        
-        # Serializar datos
-        serializer = AttendanceRecordSerializer(records, many=True)
-        
-        # Estadísticas adicionales
-        stats = {
-            'total_records': queryset.count(),
-            'total_employees': queryset.values('employee').distinct().count(),
-            'date_range': {
-                'from': date_from.isoformat(),
-                'to': timezone.now().date().isoformat()
+            'message': f'{best_match.name} reconocido',
+            'employee': {
+                'id': str(best_match.id),
+                'name': best_match.name,
+                'employee_id': best_match.employee_id
+            },
+            'attendance': {
+                'id': str(attendance_record.id),
+                'type': attendance_type,
+                'timestamp': attendance_record.timestamp.isoformat(),
+                'confidence': f"{best_confidence:.1%}",
+                'attempt': attempt
             }
-        }
+        })
         
-        return Response({
-            'success': True,
-            'records': serializer.data,
-            'stats': stats
-        }, status=status.HTTP_200_OK)
-        
-    except ValueError:
-        return Response({
-            'success': False,
-            'message': 'Parámetros de consulta inválidos'
-        }, status=status.HTTP_400_BAD_REQUEST)
     except Exception as e:
+        print(f"❌ Error verificación ultra rápida: {str(e)}")
         return Response({
-            'success': False,
-            'message': f'Error interno del servidor: {str(e)}'
-        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            'processing': True,
+            'message': f'Intento {attempt}: Error, reintentando'
+        })
 
 @api_view(['GET'])
 def get_employees(request):
     """
-    Obtiene la lista de empleados registrados
+    Lista de empleados registrados
     """
     try:
-        # Filtros opcionales
-        active_only = request.GET.get('active_only', 'true').lower() == 'true'
-        department = request.GET.get('department')
-        search = request.GET.get('search')
-        
-        # Query base
-        queryset = Employee.objects.all()
-        
-        # Aplicar filtros
-        if active_only:
-            queryset = queryset.filter(is_active=True)
-        
-        if department:
-            queryset = queryset.filter(department__icontains=department)
-        
-        if search:
-            queryset = queryset.filter(
-                models.Q(name__icontains=search) |
-                models.Q(employee_id__icontains=search) |
-                models.Q(email__icontains=search)
-            )
-        
-        # Serializar y retornar
-        employees = queryset.order_by('name')
+        employees = Employee.objects.filter(is_active=True).order_by('name')
         serializer = EmployeeSerializer(employees, many=True)
         
         return Response({
             'success': True,
-            'employees': serializer.data,
-            'count': len(serializer.data)
-        }, status=status.HTTP_200_OK)
+            'employees': serializer.data
+        })
         
     except Exception as e:
         return Response({
             'success': False,
-            'message': f'Error interno del servidor: {str(e)}'
-        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            'message': f'Error: {str(e)}'
+        })
 
 @api_view(['DELETE'])
 def delete_employee(request, employee_id):
     """
-    Elimina un empleado del sistema (soft delete)
+    🗑️ ELIMINAR EMPLEADO COMPLETAMENTE
     """
     try:
+        print(f"🗑️ Eliminando empleado: {employee_id}")
+        
         employee = Employee.objects.get(id=employee_id)
+        employee_name = employee.name
         
-        # Desactivar empleado en lugar de eliminar
-        employee.is_active = False
-        employee.save()
+        # Eliminar completamente (no soft delete)
+        FaceEncoding.objects.filter(employee=employee).delete()
+        AttendanceRecord.objects.filter(employee=employee).delete()
+        employee.user.delete()  # Esto también elimina el Employee por CASCADE
         
-        # Desactivar sus encodings faciales
-        FaceEncoding.objects.filter(employee=employee).update(is_active=False)
+        print(f"✅ Empleado eliminado completamente: {employee_name}")
         
         return Response({
             'success': True,
-            'message': f'Empleado {employee.name} desactivado exitosamente'
-        }, status=status.HTTP_200_OK)
+            'message': f'{employee_name} eliminado del sistema'
+        })
         
     except Employee.DoesNotExist:
         return Response({
             'success': False,
             'message': 'Empleado no encontrado'
-        }, status=status.HTTP_404_NOT_FOUND)
+        }, status=404)
+    except Exception as e:
+        print(f"❌ Error eliminando empleado: {str(e)}")
+        return Response({
+            'success': False,
+            'message': 'Error eliminando empleado'
+        })
+
+@api_view(['DELETE'])
+def delete_attendance(request, attendance_id):
+    """
+    🗑️ ELIMINAR REGISTRO DE ASISTENCIA
+    """
+    try:
+        attendance_record = AttendanceRecord.objects.get(id=attendance_id)
+        attendance_record.delete()
+        
+        return Response({
+            'success': True,
+            'message': 'Registro eliminado'
+        })
+        
+    except AttendanceRecord.DoesNotExist:
+        return Response({
+            'success': False,
+            'message': 'Registro no encontrado'
+        }, status=404)
     except Exception as e:
         return Response({
             'success': False,
-            'message': f'Error interno del servidor: {str(e)}'
-        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            'message': 'Error eliminando registro'
+        })

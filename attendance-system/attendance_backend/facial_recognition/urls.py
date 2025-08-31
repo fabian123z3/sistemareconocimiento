@@ -1,16 +1,19 @@
-# facial_recognition/urls.py
+# facial_recognition/urls.py - URLs ULTRA RÁPIDAS
 from django.urls import path
 from . import views
 
 urlpatterns = [
-    # Endpoint de salud
+    # Salud del sistema
     path('health/', views.health_check, name='health_check'),
     
-    # ENDPOINTS QUE FALTAN - CRÍTICO
-    path('register-employee/', views.register_employee_face, name='register_employee_face'),
-    path('verify-attendance/', views.verify_attendance, name='verify_attendance'),
-    path('attendance-history/', views.get_attendance_history, name='get_attendance_history'),
-    path('attendance-history/<uuid:employee_id>/', views.get_attendance_history, name='get_attendance_history_by_employee'),
+    # ⚡ ENDPOINTS ULTRA RÁPIDOS PARA CÁMARAS MALAS
+    path('ultra-fast-register/', views.ultra_fast_register, name='ultra_fast_register'),
+    path('ultra-fast-verify/', views.ultra_fast_verify, name='ultra_fast_verify'),
+    
+    # Gestión de empleados
     path('employees/', views.get_employees, name='get_employees'),
-    path('employees/<uuid:employee_id>/delete/', views.delete_employee, name='delete_employee'),
+    path('delete-employee/<uuid:employee_id>/', views.delete_employee, name='delete_employee'),
+    
+    # Gestión de asistencias
+    path('delete-attendance/<uuid:attendance_id>/', views.delete_attendance, name='delete_attendance'),
 ]
