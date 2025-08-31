@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+env/
+.env
+.venv
+*.log
+db.sqlite3
+media/
+
+# Node.js / React Native
+node_modules/
+.expo/
+.expo-shared/
+dist/
+build/
+package-lock.json
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
