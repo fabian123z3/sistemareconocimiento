@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Panel de Asistencia</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; background: #f5f5f5; }
+        .header { background: #2c3e50; color: white; padding: 20px; border-radius: 8px; margin-bottom: 20px; }
+        .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-bottom: 20px; }
+        .stat-card { background: white; padding: 20px; border-radius: 8px; text-align: center; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .stat-number { font-size: 2em; font-weight: bold; color: #3498db; }
+        .filters { background: white; padding: 20px; border-radius: 8px; margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .filters input, .filters select, .filters button { margin: 5px; padding: 8px; border: 1px solid #ddd; border-radius: 4px; }
+        .filters button { background: #3498db; color: white; cursor: pointer; }
+        .table-container { background: white; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        table { width: 100%; border-collapse: collapse; }
+        th { background: #34495e; color: white; padding: 12px; text-align: left; }
+        td { padding: 12px; border-bottom: 1px solid #eee; }
+        .entrada { color: #27ae60; font-weight: bold; }
+        .salida { color: #e74c3c; font-weight: bold; }
+        .loading { text-align: center; padding: 40px; }
+        .sync-indicator { padding: 5px 10px; border-radius: 15px; font-size: 0.8em; color: white; }
+        .sync-normal { background: #3498db; }
+        .sync-offline { background: #f39c12; }
+        #refreshBtn { background: #27ae60; }
+        #refreshBtn:hover { background: #219a52; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>📋 Panel de Asistencia</h1>
+        <p>Sistema de reconocimiento facial - Registros en tiempo real</p>
+    </div>
+
+    <div class="stats">
+        <div class="stat-card">
+            <div class="stat-number" id="totalRecords">-</div>
+            <div>Total Registros</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-number" id="totalEmployees">-</div>
+            <div>Empleados Activos</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-number" id="todayRecords">-</div>
+            <div>Registros Hoy</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-number" id="lastUpdate">-</div>
+            <div>Última Actualización</div>
+        </div>
+    </div>
+
+    <div class="filters">
+        <label>Últimos días:</label>
+        <select id="daysFilter">
+            <option value="1">1 día</option>
+            <option value="3">3 días</option>
+            <option value="7" selected>7 días</option>
+            <option value="15">15 días</option>
+            <option value="30">30 días</option>
+        </select>
+        
+        <label>Empleado:</label>
+        <select id="employeeFilter">
+            <option value="">Todos los empleados</option>
+        </select>
+        
+        <button id="refreshBtn" onclick="loadData()">🔄 Actualizar</button>
+        <button onclick="autoRefresh()">🔄 Auto-actualizar (30s)</button>
+    </div>
+
+    <div class="table-container">
+        <div id="loading" class="loading">
+            <p>Cargando registros...</p>
+        </div>
+        <table id="recordsTable" style="display: none;">
+            <thead>
+                <tr>
+                    <th>Fecha/Hora</th>
+                    <th>Empleado</th>
+                    <th>ID</th>
+                    <th>Tipo</th>
+                    <th>Confianza</th>
+                    <th>Notas</th>
+                </tr>
+            </thead>
+            <tbody id="recordsBody">
+            </tbody>
+        </table>
+    </div>
+
+    <script>
+        let autoRefreshInterval = null;
+
+        async function loadData() {
+            const loading = document.getElementById('loading');
+            const table = document.getElementById('recordsTable');
+            const tbody = document.getElementById('recordsBody');
+            
+            loading.style.display = 'block';
+            table.style.display = 'none';
+
+            try {
+                // Obtener parámetros de filtro
+                const days = document.getElementById('daysFilter').value;
+                const employeeId = document.getElementById('employeeFilter').value;
+                
+                // Construir URL con filtros
+                let url = '/api/attendance-records/?days=' + days;
+                if (employeeId) url += '&employee_id=' + employeeId;
+
+                // Cargar registros
+                const recordsResponse = await fetch(url);
+                const recordsData = await recordsResponse.json();
+
+                // Cargar empleados
+                const employeesResponse = await fetch('/api/employees/');
+                const employeesData = await employeesResponse.json();
+
+                if (recordsData.success) {
+                    // Actualizar estadísticas
+                    document.getElementById('totalRecords').textContent = recordsData.total;
+                    document.getElementById('totalEmployees').textContent = employeesData.employees?.length || 0;
+                    
+                    // Contar registros de hoy
+                    const today = new Date().toISOString().split('T')[0];
+                    const todayRecords = recordsData.records.filter(r => 
+                        r.timestamp.startsWith(today)
+                    ).length;
+                    document.getElementById('todayRecords').textContent = todayRecords;
+                    
+                    document.getElementById('lastUpdate').textContent = 
+                        new Date().toLocaleTimeString('es-CL');
+
+                    // Llenar tabla
+                    tbody.innerHTML = '';
+                    recordsData.records.forEach(record => {
+                        const row = tbody.insertRow();
+                        
+                        // Formatear fecha
+                        const date = new Date(record.timestamp);
+                        const formattedDate = date.toLocaleString('es-CL');
+                        
+                        // Determinar si es sincronización offline
+                        const isOfflineSync = record.notes && record.notes.includes('Sync offline');
+                        
+                        row.innerHTML = `
+                            <td>${formattedDate}</td>
+                            <td><strong>${record.employee_name}</strong></td>
+                            <td>${record.employee_id}</td>
+                            <td><span class="${record.attendance_type}">${record.attendance_type.toUpperCase()}</span></td>
+                            <td>${record.confidence}</td>
+                            <td>
+                                ${record.notes}
+                                ${isOfflineSync ? '<span class="sync-indicator sync-offline">📱 Offline</span>' : '<span class="sync-indicator sync-normal">🌐 Online</span>'}
+                            </td>
+                        `;
+                    });
+
+                    // Actualizar filtro de empleados
+                    const employeeFilter = document.getElementById('employeeFilter');
+                    const currentValue = employeeFilter.value;
+                    employeeFilter.innerHTML = '<option value="">Todos los empleados</option>';
+                    
+                    if (employeesData.success) {
+                        employeesData.employees.forEach(emp => {
+                            const option = document.createElement('option');
+                            option.value = emp.id;
+                            option.textContent = `${emp.name} (${emp.employee_id})`;
+                            if (emp.id === currentValue) option.selected = true;
+                            employeeFilter.appendChild(option);
+                        });
+                    }
+
+                    loading.style.display = 'none';
+                    table.style.display = 'table';
+                } else {
+                    throw new Error(recordsData.message || 'Error cargando datos');
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                loading.innerHTML = '<p style="color: red;">Error cargando datos: ' + error.message + '</p>';
+            }
+        }
+
+        function autoRefresh() {
+            if (autoRefreshInterval) {
+                clearInterval(autoRefreshInterval);
+                autoRefreshInterval = null;
+                document.querySelector('button[onclick="autoRefresh()"]').textContent = '🔄 Auto-actualizar (30s)';
+            } else {
+                autoRefreshInterval = setInterval(loadData, 30000);
+                document.querySelector('button[onclick="autoRefresh()"]').textContent = '⏹️ Detener auto-actualizar';
+                loadData(); // Cargar inmediatamente
+            }
+        }
+
+        // Event listeners para filtros
+        document.getElementById('daysFilter').addEventListener('change', loadData);
+        document.getElementById('employeeFilter').addEventListener('change', loadData);
+
+        // Cargar datos al inicio
+        loadData();
+    </script>
+</body>
+</html>
