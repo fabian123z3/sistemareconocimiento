@@ -3,16 +3,18 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Panel de Asistencia</title>
+    <title>Panel de Asistencia - Reconocimiento Facial 85%</title>
     <style>
         body { font-family: Arial, sans-serif; margin: 20px; background: #f5f5f5; }
         .header { background: #2c3e50; color: white; padding: 20px; border-radius: 8px; margin-bottom: 20px; }
+        .confidence-info { background: #3498db; color: white; padding: 10px; border-radius: 5px; margin-bottom: 20px; text-align: center; }
         .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-bottom: 20px; }
         .stat-card { background: white; padding: 20px; border-radius: 8px; text-align: center; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
         .stat-number { font-size: 2em; font-weight: bold; color: #3498db; }
         .filters { background: white; padding: 20px; border-radius: 8px; margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
         .filters input, .filters select, .filters button { margin: 5px; padding: 8px; border: 1px solid #ddd; border-radius: 4px; }
         .filters button { background: #3498db; color: white; cursor: pointer; }
+        .filters button:hover { background: #2980b9; }
         .table-container { background: white; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
         table { width: 100%; border-collapse: collapse; }
         th { background: #34495e; color: white; padding: 12px; text-align: left; }
@@ -20,17 +22,29 @@
         .entrada { color: #27ae60; font-weight: bold; }
         .salida { color: #e74c3c; font-weight: bold; }
         .loading { text-align: center; padding: 40px; }
-        .sync-indicator { padding: 5px 10px; border-radius: 15px; font-size: 0.8em; color: white; }
+        .sync-indicator { padding: 5px 10px; border-radius: 15px; font-size: 0.8em; color: white; margin-left: 10px; }
         .sync-normal { background: #3498db; }
         .sync-offline { background: #f39c12; }
+        .high-confidence { background: #27ae60; color: white; padding: 2px 6px; border-radius: 3px; font-size: 0.8em; }
+        .medium-confidence { background: #f39c12; color: white; padding: 2px 6px; border-radius: 3px; font-size: 0.8em; }
+        .low-confidence { background: #e74c3c; color: white; padding: 2px 6px; border-radius: 3px; font-size: 0.8em; }
         #refreshBtn { background: #27ae60; }
         #refreshBtn:hover { background: #219a52; }
+        .auto-sync-status { background: #ecf0f1; padding: 10px; border-radius: 5px; margin-bottom: 20px; }
     </style>
 </head>
 <body>
     <div class="header">
-        <h1>📋 Panel de Asistencia</h1>
-        <p>Sistema de reconocimiento facial - Registros en tiempo real</p>
+        <h1>📋 Panel de Asistencia - Reconocimiento Facial</h1>
+        <p>Sistema con verificación de 85% de similitud facial - Sincronización automática offline</p>
+    </div>
+
+    <div class="confidence-info">
+        <strong>🎯 Sistema de Alta Precisión:</strong> Todos los registros requieren al menos 85% de similitud facial para ser válidos
+    </div>
+
+    <div class="auto-sync-status">
+        <strong>🔄 Sincronización Automática:</strong> Los registros offline se sincronizan automáticamente al restaurarse la conexión
     </div>
 
     <div class="stats">
@@ -45,6 +59,10 @@
         <div class="stat-card">
             <div class="stat-number" id="todayRecords">-</div>
             <div>Registros Hoy</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-number" id="highConfidenceToday">-</div>
+            <div>Confianza ≥90% Hoy</div>
         </div>
         <div class="stat-card">
             <div class="stat-number" id="lastUpdate">-</div>
@@ -68,7 +86,7 @@
         </select>
         
         <button id="refreshBtn" onclick="loadData()">🔄 Actualizar</button>
-        <button onclick="autoRefresh()">🔄 Auto-actualizar (30s)</button>
+        <button onclick="toggleAutoRefresh()">🔄 Auto-actualizar (30s)</button>
     </div>
 
     <div class="table-container">
@@ -82,8 +100,8 @@
                     <th>Empleado</th>
                     <th>ID</th>
                     <th>Tipo</th>
-                    <th>Confianza</th>
-                    <th>Notas</th>
+                    <th>Similitud Facial</th>
+                    <th>Estado/Notas</th>
                 </tr>
             </thead>
             <tbody id="recordsBody">
@@ -128,8 +146,15 @@
                     const today = new Date().toISOString().split('T')[0];
                     const todayRecords = recordsData.records.filter(r => 
                         r.timestamp.startsWith(today)
-                    ).length;
-                    document.getElementById('todayRecords').textContent = todayRecords;
+                    );
+                    document.getElementById('todayRecords').textContent = todayRecords.length;
+                    
+                    // Contar registros de alta confianza hoy (≥90%)
+                    const highConfidenceToday = todayRecords.filter(r => {
+                        const confidence = parseFloat(r.confidence_percentage.replace('%', ''));
+                        return confidence >= 90;
+                    }).length;
+                    document.getElementById('highConfidenceToday').textContent = highConfidenceToday;
                     
                     document.getElementById('lastUpdate').textContent = 
                         new Date().toLocaleTimeString('es-CL');
@@ -146,15 +171,24 @@
                         // Determinar si es sincronización offline
                         const isOfflineSync = record.notes && record.notes.includes('Sync offline');
                         
+                        // Determinar nivel de confianza
+                        const confidence = parseFloat(record.confidence_percentage.replace('%', ''));
+                        let confidenceClass = 'low-confidence';
+                        if (confidence >= 95) confidenceClass = 'high-confidence';
+                        else if (confidence >= 85) confidenceClass = 'medium-confidence';
+                        
                         row.innerHTML = `
                             <td>${formattedDate}</td>
                             <td><strong>${record.employee_name}</strong></td>
                             <td>${record.employee_id}</td>
                             <td><span class="${record.attendance_type}">${record.attendance_type.toUpperCase()}</span></td>
-                            <td>${record.confidence}</td>
+                            <td><span class="${confidenceClass}">${record.confidence_percentage}</span></td>
                             <td>
-                                ${record.notes}
-                                ${isOfflineSync ? '<span class="sync-indicator sync-offline">📱 Offline</span>' : '<span class="sync-indicator sync-normal">🌐 Online</span>'}
+                                ${record.notes || 'Registro normal'}
+                                ${isOfflineSync ? 
+                                    '<span class="sync-indicator sync-offline">📱 Sincronizado</span>' : 
+                                    '<span class="sync-indicator sync-normal">🌐 Online</span>'
+                                }
                             </td>
                         `;
                     });
@@ -185,14 +219,16 @@
             }
         }
 
-        function autoRefresh() {
+        function toggleAutoRefresh() {
+            const button = document.querySelector('button[onclick="toggleAutoRefresh()"]');
+            
             if (autoRefreshInterval) {
                 clearInterval(autoRefreshInterval);
                 autoRefreshInterval = null;
-                document.querySelector('button[onclick="autoRefresh()"]').textContent = '🔄 Auto-actualizar (30s)';
+                button.textContent = '🔄 Auto-actualizar (30s)';
             } else {
                 autoRefreshInterval = setInterval(loadData, 30000);
-                document.querySelector('button[onclick="autoRefresh()"]').textContent = '⏹️ Detener auto-actualizar';
+                button.textContent = '⏹️ Detener auto-actualizar';
                 loadData(); // Cargar inmediatamente
             }
         }
@@ -203,6 +239,15 @@
 
         // Cargar datos al inicio
         loadData();
+
+        // Mostrar estado de conexión
+        window.addEventListener('online', function() {
+            console.log('Conexión restaurada - Los registros offline se sincronizarán automáticamente');
+        });
+
+        window.addEventListener('offline', function() {
+            console.log('Conexión perdida - Los registros se guardarán offline');
+        });
     </script>
 </body>
 </html>

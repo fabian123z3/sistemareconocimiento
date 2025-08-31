@@ -5,11 +5,11 @@ urlpatterns = [
     # Salud del sistema
     path('health/', views.health_check, name='health_check'),
     
-    # 📸 SISTEMA BASADO EN FOTOS
+    # 📸 SISTEMA BASADO EN FOTOS CON 85% CONFIANZA
     path('register-photo/', views.register_employee_photo, name='register_employee_photo'),
     path('verify-photo/', views.verify_attendance_photo, name='verify_attendance_photo'),
     
-    # 🔄 SINCRONIZACIÓN OFFLINE
+    # 🔄 SINCRONIZACIÓN OFFLINE AUTOMÁTICA
     path('sync-offline/', views.sync_offline_records, name='sync_offline_records'),
     
     # 📋 GESTIÓN DE DATOS
@@ -22,4 +22,8 @@ urlpatterns = [
     
     # 🌐 PANEL WEB
     path('panel/', views.attendance_panel, name='attendance_panel'),
+    
+    # 🔄 COMPATIBILIDAD
+    path('register/', views.register_employee, name='register_employee_compat'),
+    path('verify/', views.verify_attendance, name='verify_attendance_compat'),
 ]

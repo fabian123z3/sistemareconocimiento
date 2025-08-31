@@ -8,15 +8,14 @@ import io
 
 class FaceRecognitionService:
     def __init__(self):
-        self.tolerance = 2.0  # ULTRA permisivo para cambios físicos
+        self.confidence_threshold = 0.85  # 85% de similitud requerida
     
     def tolerant_photo_encoding(self, base64_image):
         """
-        📸 ENCODING DE FOTO - ULTRA TOLERANTE para cambios físicos
-        (lentes, barba, iluminación, pose, etc.)
+        📸 ENCODING DE FOTO - OPTIMIZADO PARA 85% DE CONFIANZA
         """
         try:
-            print("📸 Procesando foto con máxima tolerancia...")
+            print("📸 Procesando foto para 85% de confianza...")
             
             # Decodificar imagen
             image_data = base64.b64decode(base64_image.split(',')[1] if ',' in base64_image else base64_image)
@@ -26,16 +25,16 @@ class FaceRecognitionService:
             if image.mode != 'RGB':
                 image = image.convert('RGB')
             
-            # Redimensionar inteligentemente
-            target_width = 800  # Tamaño óptimo para análisis
+            # Redimensionar para análisis óptimo
+            target_width = 1024  # Mayor resolución para mejor precisión
             if image.width != target_width:
                 aspect_ratio = image.height / image.width
                 target_height = int(target_width * aspect_ratio)
                 image = image.resize((target_width, target_height), Image.Resampling.LANCZOS)
                 print(f"📸 Redimensionado a: {target_width}x{target_height}")
             
-            # GENERAR MÚLTIPLES VERSIONES para máxima tolerancia
-            versions = self._create_tolerant_versions(image)
+            # GENERAR VERSIONES MEJORADAS para mejor análisis
+            versions = self._create_enhanced_versions(image)
             
             # DETECTAR ROSTROS EN TODAS LAS VERSIONES
             all_encodings = []
@@ -45,29 +44,31 @@ class FaceRecognitionService:
                 
                 version_array = np.array(version_image)
                 
-                # Detectar rostros con múltiples métodos
-                face_locations = self._detect_faces_multi_method(version_array)
+                # Detectar rostros con alta precisión
+                face_locations = self._detect_faces_high_precision(version_array)
                 
                 if face_locations:
                     print(f"✅ {len(face_locations)} rostro(s) en versión {version_name}")
                     
-                    # Usar el rostro más grande
+                    # Usar el rostro más grande y centrado
                     if len(face_locations) > 1:
-                        face_locations = [max(face_locations, key=lambda f: (f[2] - f[0]) * (f[1] - f[3]))]
+                        face_locations = [self._select_best_face(face_locations)]
                     
-                    # Generar encoding
+                    # Generar encoding con alta precisión
                     try:
                         face_encodings = face_recognition.face_encodings(
                             version_array,
                             face_locations,
-                            num_jitters=3  # Más variaciones para tolerancia
+                            num_jitters=5,  # Más precisión para 85% threshold
+                            model="large"  # Modelo más preciso
                         )
                         
                         if face_encodings:
                             all_encodings.append({
                                 'version': version_name,
                                 'encoding': face_encodings[0].tolist(),
-                                'location': face_locations[0]
+                                'location': face_locations[0],
+                                'quality_score': self._calculate_face_quality(version_array, face_locations[0])
                             })
                     except Exception as e:
                         print(f"❌ Error generando encoding para {version_name}: {str(e)}")
@@ -75,16 +76,18 @@ class FaceRecognitionService:
             if not all_encodings:
                 return None, "No se detectó rostro en ninguna versión de la imagen"
             
-            # Seleccionar el mejor encoding (el de mejor calidad)
-            main_encoding = all_encodings[0]['encoding']
-            alternative_encodings = [enc['encoding'] for enc in all_encodings[1:]]
+            # Seleccionar el encoding de mejor calidad
+            best_encoding = max(all_encodings, key=lambda x: x['quality_score'])
+            alternative_encodings = [enc['encoding'] for enc in all_encodings if enc != best_encoding]
             
-            print(f"✅ Generados {len(all_encodings)} encodings tolerantes")
+            print(f"✅ Generados {len(all_encodings)} encodings, mejor calidad: {best_encoding['quality_score']:.3f}")
             
             # Retornar encoding principal y alternativos
             result = {
-                'main': main_encoding,
-                'alternatives': alternative_encodings
+                'main': best_encoding['encoding'],
+                'alternatives': alternative_encodings,
+                'quality_score': best_encoding['quality_score'],
+                'version_used': best_encoding['version']
             }
             
             return result, f"Encoding exitoso con {len(all_encodings)} versiones"
@@ -93,61 +96,46 @@ class FaceRecognitionService:
             print(f"❌ Error procesando foto: {str(e)}")
             return None, f"Error procesando imagen: {str(e)}"
     
-    def _create_tolerant_versions(self, image):
+    def _create_enhanced_versions(self, image):
         """
-        🎨 CREAR MÚLTIPLES VERSIONES para máxima tolerancia a cambios
+        🎨 CREAR VERSIONES MEJORADAS para análisis de alta precisión
         """
         versions = {}
         
         # Versión original
         versions['original'] = image
         
-        # Versión con mejor contraste (para mala iluminación)
+        # Versión con contraste optimizado
         enhancer = ImageEnhance.Contrast(image)
-        versions['high_contrast'] = enhancer.enhance(2.5)
+        versions['enhanced_contrast'] = enhancer.enhance(1.8)
         
-        # Versión más brillante (para lugares oscuros)
+        # Versión con brillo optimizado
         enhancer = ImageEnhance.Brightness(image)
-        versions['bright'] = enhancer.enhance(1.4)
+        versions['enhanced_brightness'] = enhancer.enhance(1.2)
         
-        # Versión más oscura (para lugares muy iluminados)
-        versions['dark'] = enhancer.enhance(0.7)
-        
-        # Versión con más nitidez (para fotos borrosas)
+        # Versión con nitidez mejorada
         enhancer = ImageEnhance.Sharpness(image)
-        versions['sharp'] = enhancer.enhance(2.0)
+        versions['enhanced_sharpness'] = enhancer.enhance(1.5)
         
         # Versión ecualizada (mejora automática)
         versions['equalized'] = ImageOps.equalize(image)
         
-        # Versión en escala de grises convertida a RGB (elimina efectos de color)
-        gray = ImageOps.grayscale(image).convert('RGB')
-        versions['grayscale'] = gray
-        
-        # Versión con filtro de nitidez
+        # Versión con filtro de mejora
         versions['filtered'] = image.filter(ImageFilter.SHARPEN)
+        
+        # Versión normalizada (mejor para condiciones variables)
+        normalized = ImageOps.autocontrast(image)
+        versions['normalized'] = normalized
         
         return versions
     
-    def _detect_faces_multi_method(self, image_array):
+    def _detect_faces_high_precision(self, image_array):
         """
-        🎯 DETECTAR ROSTROS con múltiples métodos para máxima tolerancia
+        🎯 DETECTAR ROSTROS con alta precisión para 85% threshold
         """
         face_locations = []
         
-        # Método 1: HOG estándar
-        try:
-            locations = face_recognition.face_locations(
-                image_array,
-                number_of_times_to_upsample=1,
-                model="hog"
-            )
-            if locations:
-                face_locations.extend(locations)
-        except:
-            pass
-        
-        # Método 2: CNN (más preciso)
+        # Método 1: CNN (más preciso)
         try:
             locations = face_recognition.face_locations(
                 image_array,
@@ -159,11 +147,11 @@ class FaceRecognitionService:
         except:
             pass
         
-        # Método 3: HOG con más upsampling
+        # Método 2: HOG con upsampling
         try:
             locations = face_recognition.face_locations(
                 image_array,
-                number_of_times_to_upsample=3,
+                number_of_times_to_upsample=2,
                 model="hog"
             )
             if locations:
@@ -171,17 +159,13 @@ class FaceRecognitionService:
         except:
             pass
         
-        # Eliminar duplicados (rostros muy similares)
+        # Eliminar duplicados cercanos
         if len(face_locations) > 1:
             unique_locations = []
             for loc in face_locations:
                 is_duplicate = False
                 for unique_loc in unique_locations:
-                    # Si las ubicaciones son muy similares, es un duplicado
-                    if (abs(loc[0] - unique_loc[0]) < 20 and 
-                        abs(loc[1] - unique_loc[1]) < 20 and 
-                        abs(loc[2] - unique_loc[2]) < 20 and 
-                        abs(loc[3] - unique_loc[3]) < 20):
+                    if self._faces_overlap(loc, unique_loc):
                         is_duplicate = True
                         break
                 if not is_duplicate:
@@ -190,97 +174,166 @@ class FaceRecognitionService:
         
         return face_locations
     
+    def _faces_overlap(self, face1, face2, threshold=30):
+        """Verificar si dos rostros se superponen"""
+        return (abs(face1[0] - face2[0]) < threshold and 
+                abs(face1[1] - face2[1]) < threshold and 
+                abs(face1[2] - face2[2]) < threshold and 
+                abs(face1[3] - face2[3]) < threshold)
+    
+    def _select_best_face(self, face_locations):
+        """Seleccionar el mejor rostro basado en tamaño y posición"""
+        # Preferir rostros más grandes y centrados
+        scored_faces = []
+        
+        for face in face_locations:
+            top, right, bottom, left = face
+            
+            # Tamaño del rostro
+            face_size = (bottom - top) * (right - left)
+            
+            # Posición central (bonus para rostros centrados)
+            center_y = (top + bottom) / 2
+            center_x = (left + right) / 2
+            
+            # Score combinado
+            score = face_size * 0.8 + (1000 - abs(center_y - 512)) * 0.1 + (1000 - abs(center_x - 512)) * 0.1
+            
+            scored_faces.append((face, score))
+        
+        # Retornar el rostro con mejor score
+        return max(scored_faces, key=lambda x: x[1])[0]
+    
+    def _calculate_face_quality(self, image_array, face_location):
+        """Calcular calidad del rostro detectado"""
+        top, right, bottom, left = face_location
+        
+        # Extraer región del rostro
+        face_image = image_array[top:bottom, left:right]
+        
+        if face_image.size == 0:
+            return 0.0
+        
+        # Métricas de calidad
+        face_size = (bottom - top) * (right - left)
+        contrast = np.std(face_image)
+        brightness = np.mean(face_image)
+        
+        # Score de calidad normalizado
+        size_score = min(1.0, face_size / 10000)  # Normalizar tamaño
+        contrast_score = min(1.0, contrast / 100)  # Normalizar contraste
+        brightness_score = 1.0 - abs(brightness - 128) / 128  # Brillo óptimo ~128
+        
+        quality = (size_score * 0.4 + contrast_score * 0.3 + brightness_score * 0.3)
+        
+        return quality
+    
     def ultra_tolerant_compare(self, known_encoding, unknown_encoding):
         """
-        🔍 COMPARACIÓN ULTRA TOLERANTE para cambios físicos
-        - Lentes vs sin lentes
-        - Con barba vs sin barba
-        - Diferentes iluminaciones
-        - Diferentes poses
+        🔍 COMPARACIÓN OPTIMIZADA PARA 85% DE CONFIANZA
         """
         try:
             known_encoding = np.array(known_encoding)
             unknown_encoding = np.array(unknown_encoding)
             
-            # Método 1: Distancia euclidiana estándar
+            # Método 1: Distancia euclidiana (el más estándar)
             euclidean_distance = np.linalg.norm(known_encoding - unknown_encoding)
             
-            # Método 2: Distancia de coseno (mejor para cambios de iluminación)
+            # Método 2: Distancia de coseno (mejor para variaciones de iluminación)
             cosine_similarity = np.dot(known_encoding, unknown_encoding) / (
                 np.linalg.norm(known_encoding) * np.linalg.norm(unknown_encoding)
             )
             cosine_distance = 1 - cosine_similarity
             
-            # Método 3: Distancia de Manhattan (más tolerante a outliers)
-            manhattan_distance = np.sum(np.abs(known_encoding - unknown_encoding))
+            # Método 3: Correlación de Pearson
+            correlation = np.corrcoef(known_encoding, unknown_encoding)[0, 1]
+            correlation = max(-1, min(1, correlation))  # Clamp entre -1 y 1
             
-            # Combinar métricas con pesos optimizados para tolerancia
-            # Euclidiana: 40%, Coseno: 35%, Manhattan: 25%
-            combined_distance = (
-                0.40 * (euclidean_distance / 2.0) +  # Normalizada
-                0.35 * cosine_distance +
-                0.25 * (manhattan_distance / 100.0)  # Normalizada
+            # Combinar métricas para 85% threshold
+            # Euclidiana normalizada (0.6 = threshold estándar face_recognition)
+            euclidean_score = max(0, 1 - (euclidean_distance / 0.6))
+            
+            # Coseno score
+            cosine_score = cosine_similarity
+            
+            # Correlación score
+            correlation_score = (correlation + 1) / 2  # Normalizar a 0-1
+            
+            # Score combinado ponderado
+            # Euclidiana: 50%, Coseno: 30%, Correlación: 20%
+            combined_confidence = (
+                0.50 * euclidean_score +
+                0.30 * cosine_score +
+                0.20 * correlation_score
             )
             
-            # Convertir a confianza ULTRA PERMISIVA
-            # Ajustado para ser muy tolerante a cambios físicos
-            max_distance = 1.5  # Muy alto para máxima tolerancia
-            confidence = max(0, 1 - (combined_distance / max_distance))
+            # Asegurar que esté en rango 0-1
+            combined_confidence = max(0.0, min(1.0, combined_confidence))
             
-            # Bonus por similitud de coseno alta (bueno para iluminación)
-            if cosine_similarity > 0.7:
-                confidence += 0.1
+            print(f"🔍 Métricas - Euclidiana: {euclidean_distance:.3f} (score: {euclidean_score:.3f})")
+            print(f"🔍 Coseno: {cosine_distance:.3f} (score: {cosine_score:.3f})")
+            print(f"🔍 Correlación: {correlation:.3f} (score: {correlation_score:.3f})")
+            print(f"🔍 Confianza final: {combined_confidence:.3f} ({combined_confidence:.1%})")
             
-            # Asegurar que no exceda 1.0
-            confidence = min(1.0, confidence)
-            
-            print(f"🔍 Métricas - Euclidiana: {euclidean_distance:.3f}, Coseno: {cosine_distance:.3f}, Manhattan: {manhattan_distance:.1f}")
-            print(f"🔍 Distancia combinada: {combined_distance:.3f}, Confianza final: {confidence:.3f}")
-            
-            return confidence
+            return combined_confidence
             
         except Exception as e:
-            print(f"❌ Error en comparación tolerante: {str(e)}")
+            print(f"❌ Error en comparación: {str(e)}")
             return 0.0
     
-    # Métodos de compatibilidad
-    def encode_face_from_base64(self, base64_image):
-        """Método de compatibilidad"""
-        return self.tolerant_photo_encoding(base64_image)
-    
     def compare_faces(self, known_encoding, unknown_encoding, tolerance=None):
-        """Método de compatibilidad"""
+        """
+        🔍 COMPARAR ROSTROS con threshold de 85%
+        """
         confidence = self.ultra_tolerant_compare(known_encoding, unknown_encoding)
-        threshold = 0.05 if tolerance is None else tolerance  # Umbral ultra bajo
-        return confidence > threshold, confidence
+        
+        # Usar threshold de 85% si no se especifica otro
+        threshold = self.confidence_threshold if tolerance is None else tolerance
+        is_match = confidence >= threshold
+        
+        return is_match, confidence
     
     def validate_image_quality(self, base64_image):
         """
-        ✅ VALIDACIÓN PERMISIVA de imagen
+        ✅ VALIDACIÓN ESTRICTA de imagen para alta precisión
         """
         try:
             image_data = base64.b64decode(base64_image.split(',')[1] if ',' in base64_image else base64_image)
             image = Image.open(io.BytesIO(image_data))
             
-            # Validaciones mínimas
-            if image.width < 100 or image.height < 100:
-                return False, "Imagen muy pequeña (mínimo 100x100)"
+            # Validaciones de tamaño
+            if image.width < 200 or image.height < 200:
+                return False, "Imagen muy pequeña (mínimo 200x200 para 85% de confianza)"
             
-            if image.width > 10000 or image.height > 10000:
-                return False, "Imagen muy grande (máximo 10000x10000)"
+            if image.width > 8000 or image.height > 8000:
+                return False, "Imagen muy grande (máximo 8000x8000)"
             
-            # Verificar que no esté completamente negra o blanca
+            # Verificar calidad de iluminación
             image_array = np.array(image.convert('L'))  # Escala de grises
             mean_brightness = np.mean(image_array)
+            brightness_std = np.std(image_array)
             
-            if mean_brightness < 10:
-                return False, "Imagen muy oscura"
-            elif mean_brightness > 245:
-                return False, "Imagen muy clara"
+            if mean_brightness < 20:
+                return False, "Imagen muy oscura para reconocimiento preciso"
+            elif mean_brightness > 235:
+                return False, "Imagen muy clara (sobreexpuesta)"
             
-            print(f"✅ Imagen válida: {image.width}x{image.height}, brillo promedio: {mean_brightness:.1f}")
-            return True, "Imagen válida"
+            if brightness_std < 15:
+                return False, "Imagen con poco contraste"
+            
+            # Verificar que no esté borrosa
+            laplacian_var = cv2.Laplacian(np.array(image.convert('L')), cv2.CV_64F).var()
+            if laplacian_var < 100:
+                return False, "Imagen muy borrosa para reconocimiento preciso"
+            
+            print(f"✅ Imagen válida: {image.width}x{image.height}")
+            print(f"   Brillo: {mean_brightness:.1f}, Contraste: {brightness_std:.1f}, Nitidez: {laplacian_var:.1f}")
+            return True, "Imagen válida para reconocimiento de alta precisión"
             
         except Exception as e:
             print(f"❌ Error validando imagen: {str(e)}")
             return False, f"Error: {str(e)}"
+    
+    def encode_face_from_base64(self, base64_image):
+        """Método de compatibilidad"""
+        return self.tolerant_photo_encoding(base64_image)

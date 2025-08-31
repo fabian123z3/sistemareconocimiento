@@ -26,7 +26,9 @@ interface OfflineRecord {
   type: string;
   image: string;
   timestamp: string;
-  employee_name?: string;
+  latitude?: number;
+  longitude?: number;
+  notes?: string;
 }
 
 export default function App() {
@@ -37,6 +39,7 @@ export default function App() {
   
   const [isOnline, setIsOnline] = useState(true);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [isSyncing, setIsSyncing] = useState(false);
   
   const [employeeName, setEmployeeName] = useState('');
   const [showRegistrationForm, setShowRegistrationForm] = useState(false);
@@ -59,9 +62,11 @@ export default function App() {
       
       setIsOnline(nowOnline || false);
       
-      // Si volvimos a estar online, sincronizar
+      // Si volvimos a estar online, sincronizar automáticamente
       if (wasOffline && nowOnline && offlineRecords.length > 0) {
-        syncOfflineRecords();
+        setTimeout(() => {
+          syncOfflineRecords();
+        }, 1000); // Esperar 1 segundo para estabilizar la conexión
       }
     });
 
@@ -117,12 +122,12 @@ export default function App() {
 
       setCurrentAction(action);
       
-      // Tomar foto
+      // Tomar foto con alta calidad para 85% de confianza
       const result = await ImagePicker.launchCameraAsync({
         mediaTypes: ImagePicker.MediaTypeOptions.Images,
         allowsEditing: true,
         aspect: [3, 4],
-        quality: 0.8,
+        quality: 0.9, // Alta calidad para mejor reconocimiento
         base64: true,
       });
 
@@ -155,13 +160,12 @@ export default function App() {
     setShowPhotoPreview(false);
 
     try {
-      // Convertir a base64 si es necesario
+      // Convertir a base64
       let base64Image = '';
       
       if (capturedPhoto.includes('data:image')) {
         base64Image = capturedPhoto;
       } else {
-        // Leer el asset y obtener base64
         const response = await fetch(capturedPhoto);
         const blob = await response.blob();
         
@@ -224,7 +228,7 @@ export default function App() {
         
         Alert.alert(
           '✅ Registro Exitoso', 
-          `${employeeName} registrado con ID ${data.employee.employee_id}`,
+          `${employeeName} registrado con ID ${data.employee.employee_id}\n\nReconocimiento configurado para 85% de similitud`,
           [{ text: 'OK', onPress: () => {
             setShowRegistrationForm(false);
             setEmployeeName('');
@@ -250,7 +254,8 @@ export default function App() {
         local_id: `offline_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
         type: type,
         image: base64Image,
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
+        notes: 'Registrado offline'
       };
 
       const updatedOfflineRecords = [...offlineRecords, offlineRecord];
@@ -259,7 +264,7 @@ export default function App() {
 
       Alert.alert(
         '📱 Registro Offline',
-        `${type.toUpperCase()} guardada localmente.\nSe sincronizará cuando vuelva la conexión.`,
+        `${type.toUpperCase()} guardada localmente.\n\nSe sincronizará automáticamente cuando vuelva la conexión.\n\nRequiere 85% de similitud para confirmar identidad.`,
         [{ text: 'OK' }]
       );
       return;
@@ -286,7 +291,7 @@ export default function App() {
       if (data.success) {
         const { employee, attendance } = data;
         
-        console.log(`✅ Empleado reconocido: ${employee.name}`);
+        console.log(`✅ Empleado reconocido: ${employee.name} con ${attendance.confidence}`);
         
         setCurrentUser(employee);
         await saveToStorage('currentUser', employee);
@@ -305,14 +310,14 @@ export default function App() {
 
         Alert.alert(
           '✅ Reconocido',
-          `¡${employee.name}!\n${attendance.type.toUpperCase()} registrada exitosamente\nConfianza: ${attendance.confidence}`,
+          `¡${employee.name}!\n\n${attendance.type.toUpperCase()} registrada exitosamente\nSimilitud: ${attendance.confidence} (≥85% requerido)`,
           [{ text: 'OK' }]
         );
       } else {
         console.log('❌ No reconocido:', data.message);
         Alert.alert(
           '❌ No Reconocido', 
-          data.message || 'No se pudo reconocer a ningún empleado registrado.\n\n¿Estás registrado en el sistema?'
+          data.message || 'No se alcanzó el 85% de similitud requerido.\n\n¿Estás registrado en el sistema?'
         );
       }
     } catch (error) {
@@ -322,22 +327,29 @@ export default function App() {
   };
 
   const syncOfflineRecords = async () => {
-    if (offlineRecords.length === 0) return;
+    if (offlineRecords.length === 0 || !isOnline) return;
 
     console.log(`🔄 Sincronizando ${offlineRecords.length} registros offline`);
+    setIsSyncing(true);
     
     try {
       let successCount = 0;
       const remainingRecords: OfflineRecord[] = [];
+      const syncedRecords: AttendanceRecord[] = [];
 
       for (const record of offlineRecords) {
         try {
+          console.log(`🔄 Sincronizando registro: ${record.local_id}`);
+          
           const response = await fetch(`${API_BASE_URL}/verify-photo/`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               image: record.image,
               type: record.type,
+              latitude: record.latitude,
+              longitude: record.longitude,
+              notes: record.notes,
               is_offline_sync: true,
               offline_timestamp: record.timestamp
             })
@@ -347,33 +359,49 @@ export default function App() {
           
           if (data.success) {
             successCount++;
+            console.log(`✅ Sincronizado: ${data.employee.name} - ${data.attendance.confidence}`);
             
-            const newRecord: AttendanceRecord = {
+            const syncedRecord: AttendanceRecord = {
               id: data.attendance.id,
               employee_name: data.employee.name,
               attendance_type: data.attendance.type,
-              timestamp: new Date(data.attendance.timestamp).toLocaleString('es-CL'),
+              timestamp: new Date(record.timestamp).toLocaleString('es-CL'),
               confidence_percentage: data.attendance.confidence,
             };
 
-            const updatedHistory = [newRecord, ...attendanceHistory];
-            setAttendanceHistory(updatedHistory.slice(0, 50));
-            await saveToStorage('attendanceHistory', updatedHistory.slice(0, 50));
+            syncedRecords.push(syncedRecord);
           } else {
+            console.log(`❌ Error sincronizando ${record.local_id}: ${data.message}`);
             remainingRecords.push(record);
           }
         } catch (error) {
+          console.error(`❌ Error de red sincronizando ${record.local_id}:`, error);
           remainingRecords.push(record);
         }
       }
 
+      // Actualizar historial con registros sincronizados
+      if (syncedRecords.length > 0) {
+        const updatedHistory = [...syncedRecords, ...attendanceHistory].slice(0, 50);
+        setAttendanceHistory(updatedHistory);
+        await saveToStorage('attendanceHistory', updatedHistory);
+      }
+
+      // Actualizar registros offline pendientes
       setOfflineRecords(remainingRecords);
       await saveToStorage('offlineRecords', remainingRecords);
 
       if (successCount > 0) {
         Alert.alert(
           '🔄 Sincronización Completa',
-          `Se sincronizaron ${successCount} registros offline.${remainingRecords.length > 0 ? `\n${remainingRecords.length} registros pendientes.` : ''}`
+          `Se sincronizaron ${successCount} registros offline.\n\nTodos los registros alcanzaron el 85% de similitud requerido.${remainingRecords.length > 0 ? `\n\n${remainingRecords.length} registros no pudieron sincronizarse (similitud <85%)` : ''}`,
+          [{ text: 'OK' }]
+        );
+      } else if (remainingRecords.length > 0) {
+        Alert.alert(
+          '⚠️ Sincronización Incompleta',
+          `${remainingRecords.length} registros no alcanzaron el 85% de similitud requerido.\n\nPodrían ser fotos de personas no registradas o de baja calidad.`,
+          [{ text: 'OK' }]
         );
       }
       
@@ -381,6 +409,9 @@ export default function App() {
       
     } catch (error) {
       console.error('❌ Error sincronizando:', error);
+      Alert.alert('❌ Error', 'Error durante la sincronización');
+    } finally {
+      setIsSyncing(false);
     }
   };
 
@@ -433,6 +464,25 @@ export default function App() {
     }
   };
 
+  const clearOfflineRecords = async () => {
+    Alert.alert(
+      '🗑️ Limpiar Registros Offline',
+      '¿Estás seguro de eliminar todos los registros offline pendientes?\n\nEsto no se puede deshacer.',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        { 
+          text: 'Eliminar', 
+          style: 'destructive', 
+          onPress: async () => {
+            setOfflineRecords([]);
+            await saveToStorage('offlineRecords', []);
+            Alert.alert('✅ Limpiado', 'Registros offline eliminados');
+          }
+        }
+      ]
+    );
+  };
+
   return (
     <View style={styles.container}>
       <StatusBar style="auto" />
@@ -441,8 +491,9 @@ export default function App() {
       <View style={[styles.header, !isOnline && styles.headerOffline]}>
         <Text style={styles.title}>📸 Sistema de Asistencia</Text>
         <Text style={styles.subtitle}>
-          {isOnline ? '🌐 Conectado' : '📱 Modo Offline'} 
+          {isOnline ? '🌐 Conectado' : '📱 Modo Offline'} • Precisión: 85%
           {offlineRecords.length > 0 && ` • ${offlineRecords.length} pendientes`}
+          {isSyncing && ' • Sincronizando...'}
         </Text>
       </View>
 
@@ -464,9 +515,10 @@ export default function App() {
           <TouchableOpacity 
             style={[styles.button, styles.entradaButton]}
             onPress={() => takePhoto('entrada')}
-            disabled={isProcessing}
+            disabled={isProcessing || isSyncing}
           >
             <Text style={styles.buttonText}>📸 ENTRADA</Text>
+            <Text style={styles.buttonSubtext}>Requiere 85% similitud</Text>
             {isProcessing && currentAction === 'entrada' && (
               <Text style={styles.processingText}>Procesando...</Text>
             )}
@@ -475,9 +527,10 @@ export default function App() {
           <TouchableOpacity 
             style={[styles.button, styles.salidaButton]}
             onPress={() => takePhoto('salida')}
-            disabled={isProcessing}
+            disabled={isProcessing || isSyncing}
           >
             <Text style={styles.buttonText}>📸 SALIDA</Text>
+            <Text style={styles.buttonSubtext}>Requiere 85% similitud</Text>
             {isProcessing && currentAction === 'salida' && (
               <Text style={styles.processingText}>Procesando...</Text>
             )}
@@ -487,26 +540,49 @@ export default function App() {
         <TouchableOpacity 
           style={[styles.button, styles.registerButton, !isOnline && styles.buttonDisabled]} 
           onPress={() => setShowRegistrationForm(true)}
-          disabled={isProcessing || !isOnline}
+          disabled={isProcessing || !isOnline || isSyncing}
         >
           <Text style={styles.buttonText}>👤 REGISTRAR EMPLEADO</Text>
-          {!isOnline && <Text style={styles.offlineText}>Requiere conexión</Text>}
+          <Text style={styles.buttonSubtext}>
+            {!isOnline ? 'Requiere conexión' : 'Sistema de reconocimiento facial'}
+          </Text>
         </TouchableOpacity>
         
         <TouchableOpacity 
           style={[styles.button, styles.listButton]} 
           onPress={() => setShowEmployeeList(true)}
+          disabled={isSyncing}
         >
           <Text style={styles.buttonText}>📋 EMPLEADOS ({employees.length})</Text>
         </TouchableOpacity>
 
-        {offlineRecords.length > 0 && isOnline && (
-          <TouchableOpacity 
-            style={[styles.button, styles.syncButton]} 
-            onPress={syncOfflineRecords}
-          >
-            <Text style={styles.buttonText}>🔄 SINCRONIZAR ({offlineRecords.length})</Text>
-          </TouchableOpacity>
+        {offlineRecords.length > 0 && (
+          <View style={styles.offlineSection}>
+            {isOnline && !isSyncing && (
+              <TouchableOpacity 
+                style={[styles.button, styles.syncButton]} 
+                onPress={syncOfflineRecords}
+              >
+                <Text style={styles.buttonText}>🔄 SINCRONIZAR ({offlineRecords.length})</Text>
+                <Text style={styles.buttonSubtext}>Verificar con 85% similitud</Text>
+              </TouchableOpacity>
+            )}
+            
+            {isSyncing && (
+              <View style={[styles.button, styles.syncingButton]}>
+                <Text style={styles.buttonText}>⏳ SINCRONIZANDO...</Text>
+                <Text style={styles.buttonSubtext}>Verificando identidades...</Text>
+              </View>
+            )}
+            
+            <TouchableOpacity 
+              style={[styles.button, styles.clearButton]} 
+              onPress={clearOfflineRecords}
+              disabled={isSyncing}
+            >
+              <Text style={styles.buttonText}>🗑️ LIMPIAR OFFLINE</Text>
+            </TouchableOpacity>
+          </View>
         )}
       </View>
 
@@ -518,11 +594,12 @@ export default function App() {
           {offlineRecords.map((record) => (
             <View key={record.local_id} style={[styles.historyItem, styles.offlineItem]}>
               <View style={styles.historyContent}>
-                <Text style={styles.offlineBadge}>📱 PENDIENTE</Text>
+                <Text style={styles.offlineBadge}>📱 PENDIENTE SYNC</Text>
                 <Text style={styles.historyType}>{record.type.toUpperCase()}</Text>
                 <Text style={styles.historyTime}>
                   {new Date(record.timestamp).toLocaleString('es-CL')}
                 </Text>
+                <Text style={styles.offlineNote}>Requiere verificación de 85% similitud</Text>
               </View>
             </View>
           ))}
@@ -536,8 +613,11 @@ export default function App() {
                   {record.attendance_type.toUpperCase()} • {record.confidence_percentage}
                 </Text>
                 <Text style={styles.historyTime}>{record.timestamp}</Text>
+                {record.confidence_percentage.includes('Sync offline') && (
+                  <Text style={styles.syncBadge}>🔄 Sincronizado</Text>
+                )}
               </View>
-              {isOnline && (
+              {isOnline && !isSyncing && (
                 <TouchableOpacity 
                   style={styles.deleteButton}
                   onPress={() => deleteAttendanceRecord(record.id)}
@@ -571,9 +651,16 @@ export default function App() {
               }
             </Text>
             
+            <Text style={styles.confidenceInfo}>
+              {currentAction === 'register' ? 
+                'Se configurará reconocimiento facial' : 
+                'Requiere 85% de similitud para verificar'
+              }
+            </Text>
+            
             {!isOnline && currentAction !== 'register' && (
               <Text style={styles.offlineWarning}>
-                📱 Modo Offline - Se sincronizará cuando vuelva la conexión
+                📱 Modo Offline - Se sincronizará automáticamente cuando vuelva la conexión
               </Text>
             )}
             
@@ -611,6 +698,9 @@ export default function App() {
             <Text style={styles.modalTitle}>👤 Registrar Empleado</Text>
             <Text style={styles.modalDescription}>
               Ingresa el nombre completo del empleado
+            </Text>
+            <Text style={styles.confidenceInfo}>
+              Se configurará reconocimiento facial con 85% de precisión
             </Text>
             
             <TextInput
@@ -669,14 +759,15 @@ export default function App() {
                 <View style={styles.employeeInfo}>
                   <Text style={styles.employeeName}>{employee.name}</Text>
                   <Text style={styles.employeeId}>ID: {employee.employee_id}</Text>
+                  <Text style={styles.employeeNote}>Reconocimiento facial configurado</Text>
                 </View>
-                {isOnline && (
+                {isOnline && !isSyncing && (
                   <TouchableOpacity 
                     style={styles.deleteButton}
                     onPress={() => {
                       Alert.alert(
                         'Eliminar Empleado',
-                        `¿Estás seguro de eliminar a ${employee.name}?`,
+                        `¿Estás seguro de eliminar a ${employee.name}?\n\nEsto eliminará su reconocimiento facial.`,
                         [
                           { text: 'Cancelar', style: 'cancel' },
                           { text: 'Eliminar', style: 'destructive', onPress: () => deleteEmployee(employee) }
@@ -694,7 +785,7 @@ export default function App() {
               <View style={styles.noDataContainer}>
                 <Text style={styles.noDataText}>
                   No hay empleados registrados{'\n\n'}
-                  {!isOnline ? 'Requiere conexión para cargar empleados' : 'Usa "REGISTRAR EMPLEADO" para agregar el primero'}
+                  {!isOnline ? 'Requiere conexión para cargar empleados' : 'Usa "REGISTRAR EMPLEADO" para configurar reconocimiento facial'}
                 </Text>
               </View>
             )}
@@ -710,7 +801,7 @@ const styles = StyleSheet.create({
   header: { backgroundColor: '#2c3e50', padding: 20, paddingTop: 50, alignItems: 'center' },
   headerOffline: { backgroundColor: '#e67e22' },
   title: { fontSize: 20, fontWeight: 'bold', color: 'white' },
-  subtitle: { fontSize: 14, color: 'white', marginTop: 5 },
+  subtitle: { fontSize: 12, color: 'white', marginTop: 5, textAlign: 'center' },
   
   userSection: { backgroundColor: 'white', margin: 20, padding: 20, borderRadius: 10, alignItems: 'center', elevation: 2 },
   userName: { fontSize: 18, fontWeight: 'bold', color: '#2c3e50' },
@@ -725,23 +816,30 @@ const styles = StyleSheet.create({
   registerButton: { backgroundColor: '#3498db' },
   listButton: { backgroundColor: '#9b59b6' },
   syncButton: { backgroundColor: '#f39c12' },
+  syncingButton: { backgroundColor: '#95a5a6' },
+  clearButton: { backgroundColor: '#e74c3c', marginTop: 10 },
   cancelButton: { backgroundColor: '#95a5a6', flex: 1 },
   confirmButton: { backgroundColor: '#27ae60', flex: 1 },
   buttonDisabled: { backgroundColor: '#bdc3c7' },
   buttonText: { color: 'white', fontSize: 16, fontWeight: 'bold' },
+  buttonSubtext: { color: 'white', fontSize: 10, marginTop: 2, opacity: 0.9 },
   processingText: { color: 'white', fontSize: 12, marginTop: 5 },
   offlineText: { color: 'white', fontSize: 12, marginTop: 5, fontStyle: 'italic' },
+  
+  offlineSection: { marginTop: 10 },
   
   historySection: { flex: 1, margin: 20, backgroundColor: 'white', borderRadius: 10, padding: 15, elevation: 2 },
   historyTitle: { fontSize: 18, fontWeight: 'bold', color: '#2c3e50', marginBottom: 15 },
   historyScroll: { flex: 1 },
   historyItem: { padding: 12, borderBottomWidth: 1, borderBottomColor: '#ecf0f1', flexDirection: 'row', alignItems: 'center' },
-  offlineItem: { backgroundColor: '#fff3cd' },
+  offlineItem: { backgroundColor: '#fff3cd', borderLeftWidth: 4, borderLeftColor: '#f39c12' },
   historyContent: { flex: 1 },
   historyName: { fontSize: 16, fontWeight: 'bold', color: '#2c3e50' },
   historyType: { fontSize: 14, color: '#7f8c8d', marginTop: 2 },
   historyTime: { fontSize: 12, color: '#95a5a6', marginTop: 2 },
-  offlineBadge: { backgroundColor: '#f39c12', color: 'white', padding: 4, borderRadius: 4, fontSize: 10, fontWeight: 'bold', alignSelf: 'flex-start' },
+  offlineBadge: { backgroundColor: '#f39c12', color: 'white', padding: 4, borderRadius: 4, fontSize: 10, fontWeight: 'bold', alignSelf: 'flex-start', marginBottom: 5 },
+  offlineNote: { fontSize: 10, color: '#f39c12', fontStyle: 'italic', marginTop: 2 },
+  syncBadge: { backgroundColor: '#3498db', color: 'white', padding: 2, borderRadius: 3, fontSize: 9, fontWeight: 'bold', alignSelf: 'flex-start', marginTop: 3 },
   deleteButton: { padding: 8 },
   deleteText: { fontSize: 18 },
   noRecords: { textAlign: 'center', color: '#7f8c8d', fontStyle: 'italic', marginTop: 50 },
@@ -751,13 +849,14 @@ const styles = StyleSheet.create({
   modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 20, paddingTop: 50, backgroundColor: '#2c3e50' },
   modalTitle: { fontSize: 20, fontWeight: 'bold', color: '#2c3e50', textAlign: 'center' },
   modalDescription: { fontSize: 14, color: '#7f8c8d', textAlign: 'center', marginVertical: 15 },
+  confidenceInfo: { fontSize: 12, color: '#3498db', textAlign: 'center', marginVertical: 10, fontStyle: 'italic' },
   
   textInput: { borderWidth: 1, borderColor: '#ddd', padding: 15, borderRadius: 8, fontSize: 16, marginBottom: 20 },
   modalButtons: { flexDirection: 'row', gap: 15 },
   
   photoPreviewContainer: { backgroundColor: 'white', padding: 25, borderRadius: 15, alignItems: 'center', elevation: 5 },
   photoPreview: { width: 250, height: 300, marginVertical: 20, borderRadius: 10, backgroundColor: '#f5f5f5' },
-  actionText: { fontSize: 16, fontWeight: 'bold', color: '#2c3e50', textAlign: 'center', marginBottom: 15 },
+  actionText: { fontSize: 16, fontWeight: 'bold', color: '#2c3e50', textAlign: 'center', marginBottom: 10 },
   photoButtons: { flexDirection: 'row', gap: 15, marginTop: 20 },
   offlineWarning: { color: '#f39c12', textAlign: 'center', marginVertical: 15, fontWeight: 'bold', fontSize: 14 },
   
@@ -766,6 +865,7 @@ const styles = StyleSheet.create({
   employeeInfo: { flex: 1 },
   employeeName: { fontSize: 16, fontWeight: 'bold', color: '#2c3e50' },
   employeeId: { fontSize: 14, color: '#7f8c8d', marginTop: 2 },
+  employeeNote: { fontSize: 11, color: '#3498db', marginTop: 2, fontStyle: 'italic' },
   
   closeButton: { backgroundColor: 'rgba(255,255,255,0.2)', padding: 12, borderRadius: 25 },
   closeButtonText: { color: 'white', fontSize: 18, fontWeight: 'bold' },
