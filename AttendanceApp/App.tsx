@@ -8,7 +8,8 @@ import {
   Modal,
   ScrollView,
   Dimensions,
-  ActivityIndicator
+  ActivityIndicator,
+  TextInput  // ← AGREGADO
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { CameraView, useCameraPermissions } from 'expo-camera';
@@ -18,10 +19,8 @@ import axios from 'axios';
 
 const { width, height } = Dimensions.get('window');
 
-// Configuración del servidor Django
-const API_BASE_URL = 'http://10.0.2.2:8000/api'; // Para emulador Android
-// const API_BASE_URL = 'http://localhost:8000/api'; // Para iOS simulator
-// const API_BASE_URL = 'http://YOUR_IP:8000/api'; // Para dispositivo físico
+// Configuración del servidor Django - CAMBIADA CON TU IP
+const API_BASE_URL = 'http://192.168.96.36:8000/api';
 
 interface Employee {
   id: string;
@@ -148,8 +147,8 @@ export default function App() {
         name: registrationData.name,
         employee_id: registrationData.employee_id,
         email: `${registrationData.employee_id}@company.com`,
-        department: registrationData.department,
-        position: registrationData.position,
+        department: registrationData.department || 'General',
+        position: registrationData.position || 'Empleado',
         image: base64Image,
       });
 
@@ -247,10 +246,32 @@ export default function App() {
   };
 
   const proceedWithRegistration = () => {
-    if (!registrationData.name || !registrationData.employee_id) {
-      Alert.alert('Error', 'Nombre e ID de empleado son requeridos');
+    // Validación mejorada
+    const { name, employee_id, department, position } = registrationData;
+    
+    if (!name.trim()) {
+      Alert.alert('Error', 'El nombre es obligatorio');
       return;
     }
+    
+    if (!employee_id.trim()) {
+      Alert.alert('Error', 'El ID del empleado es obligatorio');
+      return;
+    }
+    
+    if (employee_id.length < 3) {
+      Alert.alert('Error', 'El ID del empleado debe tener al menos 3 caracteres');
+      return;
+    }
+    
+    // Asignar valores por defecto si están vacíos
+    const updatedData = {
+      ...registrationData,
+      department: department.trim() || 'General',
+      position: position.trim() || 'Empleado'
+    };
+    
+    setRegistrationData(updatedData);
     setShowRegistrationForm(false);
     setShowRegistration(true);
   };
@@ -323,39 +344,47 @@ export default function App() {
         </ScrollView>
       </View>
 
-      {/* Modal de formulario de registro */}
+      {/* Modal de formulario de registro - CORREGIDO */}
       <Modal visible={showRegistrationForm} animationType="slide" transparent>
         <View style={styles.modalOverlay}>
           <View style={styles.formContainer}>
             <Text style={styles.formTitle}>Nuevo Empleado</Text>
             
             <Text style={styles.inputLabel}>Nombre completo:</Text>
-            <TouchableOpacity style={styles.input}>
-              <Text style={styles.inputText}>
-                {registrationData.name || 'Ingrese nombre'}
-              </Text>
-            </TouchableOpacity>
+            <TextInput
+              style={styles.textInput}
+              value={registrationData.name}
+              onChangeText={(text) => setRegistrationData({...registrationData, name: text})}
+              placeholder="Ingrese nombre completo"
+              placeholderTextColor="#999"
+            />
             
             <Text style={styles.inputLabel}>ID Empleado:</Text>
-            <TouchableOpacity style={styles.input}>
-              <Text style={styles.inputText}>
-                {registrationData.employee_id || 'Ingrese ID'}
-              </Text>
-            </TouchableOpacity>
+            <TextInput
+              style={styles.textInput}
+              value={registrationData.employee_id}
+              onChangeText={(text) => setRegistrationData({...registrationData, employee_id: text})}
+              placeholder="Ingrese ID del empleado"
+              placeholderTextColor="#999"
+            />
             
             <Text style={styles.inputLabel}>Departamento:</Text>
-            <TouchableOpacity style={styles.input}>
-              <Text style={styles.inputText}>
-                {registrationData.department || 'Departamento'}
-              </Text>
-            </TouchableOpacity>
+            <TextInput
+              style={styles.textInput}
+              value={registrationData.department}
+              onChangeText={(text) => setRegistrationData({...registrationData, department: text})}
+              placeholder="Ej: Recursos Humanos"
+              placeholderTextColor="#999"
+            />
             
             <Text style={styles.inputLabel}>Cargo:</Text>
-            <TouchableOpacity style={styles.input}>
-              <Text style={styles.inputText}>
-                {registrationData.position || 'Cargo'}
-              </Text>
-            </TouchableOpacity>
+            <TextInput
+              style={styles.textInput}
+              value={registrationData.position}
+              onChangeText={(text) => setRegistrationData({...registrationData, position: text})}
+              placeholder="Ej: Desarrollador Senior"
+              placeholderTextColor="#999"
+            />
 
             <View style={styles.formButtons}>
               <TouchableOpacity
@@ -586,6 +615,16 @@ const styles = StyleSheet.create({
     backgroundColor: '#f9f9f9',
   },
   inputText: {
+    fontSize: 16,
+    color: '#2c3e50',
+  },
+  textInput: {
+    borderWidth: 1,
+    borderColor: '#ddd',
+    borderRadius: 8,
+    padding: 15,
+    marginBottom: 15,
+    backgroundColor: '#fff',
     fontSize: 16,
     color: '#2c3e50',
   },
