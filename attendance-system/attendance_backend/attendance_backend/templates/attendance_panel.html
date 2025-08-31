@@ -5,230 +5,638 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Panel de Asistencia - Reconocimiento Facial 85%</title>
     <style>
-        body { font-family: Arial, sans-serif; margin: 20px; background: #f5f5f5; }
-        .header { background: #2c3e50; color: white; padding: 20px; border-radius: 8px; margin-bottom: 20px; }
-        .confidence-info { background: #3498db; color: white; padding: 10px; border-radius: 5px; margin-bottom: 20px; text-align: center; }
-        .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-bottom: 20px; }
-        .stat-card { background: white; padding: 20px; border-radius: 8px; text-align: center; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
-        .stat-number { font-size: 2em; font-weight: bold; color: #3498db; }
-        .filters { background: white; padding: 20px; border-radius: 8px; margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
-        .filters input, .filters select, .filters button { margin: 5px; padding: 8px; border: 1px solid #ddd; border-radius: 4px; }
-        .filters button { background: #3498db; color: white; cursor: pointer; }
-        .filters button:hover { background: #2980b9; }
-        .table-container { background: white; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f5f5f5; color: #333; }
+        
+        .header { 
+            background: linear-gradient(135deg, #2c3e50, #3498db); 
+            color: white; 
+            padding: 30px 20px; 
+            text-align: center;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+        }
+        .header h1 { font-size: 2.5em; margin-bottom: 10px; font-weight: 300; }
+        .header p { font-size: 1.1em; opacity: 0.9; }
+        
+        .confidence-banner { 
+            background: #3498db; 
+            color: white; 
+            padding: 15px; 
+            text-align: center; 
+            font-weight: 600;
+            box-shadow: 0 2px 10px rgba(52, 152, 219, 0.3);
+        }
+        
+        .sync-status { 
+            background: #ecf0f1; 
+            padding: 15px; 
+            border-left: 5px solid #3498db; 
+            margin: 20px 0;
+            border-radius: 0 5px 5px 0;
+        }
+        
+        .container { max-width: 1400px; margin: 0 auto; padding: 20px; }
+        
+        .stats-grid { 
+            display: grid; 
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); 
+            gap: 20px; 
+            margin: 30px 0; 
+        }
+        .stat-card { 
+            background: white; 
+            padding: 25px; 
+            border-radius: 10px; 
+            text-align: center; 
+            box-shadow: 0 5px 15px rgba(0,0,0,0.08);
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+        .stat-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 10px 25px rgba(0,0,0,0.15);
+        }
+        .stat-number { 
+            font-size: 3em; 
+            font-weight: 700; 
+            color: #3498db; 
+            display: block;
+            margin-bottom: 10px;
+        }
+        .stat-label { font-size: 1.1em; color: #7f8c8d; font-weight: 500; }
+        
+        .controls { 
+            background: white; 
+            padding: 25px; 
+            border-radius: 10px; 
+            margin: 20px 0;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.08);
+        }
+        .controls h3 { margin-bottom: 20px; color: #2c3e50; font-size: 1.3em; }
+        .filter-row { display: flex; flex-wrap: wrap; gap: 15px; align-items: center; }
+        .filter-group { display: flex; flex-direction: column; gap: 5px; }
+        .filter-group label { font-weight: 500; color: #555; font-size: 0.9em; }
+        .filter-group select, .filter-group input { 
+            padding: 12px 15px; 
+            border: 2px solid #ddd; 
+            border-radius: 8px; 
+            font-size: 1em;
+            transition: border-color 0.3s ease;
+        }
+        .filter-group select:focus, .filter-group input:focus {
+            outline: none;
+            border-color: #3498db;
+            box-shadow: 0 0 0 3px rgba(52, 152, 219, 0.1);
+        }
+        
+        .btn { 
+            padding: 12px 20px; 
+            border: none; 
+            border-radius: 8px; 
+            font-size: 1em; 
+            font-weight: 600; 
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .btn-primary { background: #3498db; color: white; }
+        .btn-primary:hover { background: #2980b9; transform: translateY(-2px); }
+        .btn-success { background: #27ae60; color: white; }
+        .btn-success:hover { background: #219a52; transform: translateY(-2px); }
+        .btn-warning { background: #f39c12; color: white; }
+        .btn-warning:hover { background: #d68910; transform: translateY(-2px); }
+        
+        .table-container { 
+            background: white; 
+            border-radius: 10px; 
+            overflow: hidden; 
+            box-shadow: 0 5px 15px rgba(0,0,0,0.08);
+            margin-top: 20px;
+        }
+        .table-header { 
+            background: #34495e; 
+            color: white; 
+            padding: 20px; 
+            font-size: 1.3em; 
+            font-weight: 600;
+        }
         table { width: 100%; border-collapse: collapse; }
-        th { background: #34495e; color: white; padding: 12px; text-align: left; }
-        td { padding: 12px; border-bottom: 1px solid #eee; }
-        .entrada { color: #27ae60; font-weight: bold; }
-        .salida { color: #e74c3c; font-weight: bold; }
-        .loading { text-align: center; padding: 40px; }
-        .sync-indicator { padding: 5px 10px; border-radius: 15px; font-size: 0.8em; color: white; margin-left: 10px; }
-        .sync-normal { background: #3498db; }
-        .sync-offline { background: #f39c12; }
-        .high-confidence { background: #27ae60; color: white; padding: 2px 6px; border-radius: 3px; font-size: 0.8em; }
-        .medium-confidence { background: #f39c12; color: white; padding: 2px 6px; border-radius: 3px; font-size: 0.8em; }
-        .low-confidence { background: #e74c3c; color: white; padding: 2px 6px; border-radius: 3px; font-size: 0.8em; }
-        #refreshBtn { background: #27ae60; }
-        #refreshBtn:hover { background: #219a52; }
-        .auto-sync-status { background: #ecf0f1; padding: 10px; border-radius: 5px; margin-bottom: 20px; }
+        th { 
+            background: #2c3e50; 
+            color: white; 
+            padding: 15px; 
+            text-align: left; 
+            font-weight: 600;
+            font-size: 0.95em;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        td { 
+            padding: 15px; 
+            border-bottom: 1px solid #ecf0f1; 
+            font-size: 0.95em;
+        }
+        tr:hover { background-color: #f8f9fa; }
+        
+        .status-entrada { 
+            color: #27ae60; 
+            font-weight: 700; 
+            text-transform: uppercase;
+        }
+        .status-salida { 
+            color: #e74c3c; 
+            font-weight: 700; 
+            text-transform: uppercase;
+        }
+        
+        .confidence-high { 
+            background: #27ae60; 
+            color: white; 
+            padding: 4px 8px; 
+            border-radius: 15px; 
+            font-size: 0.8em; 
+            font-weight: 600;
+        }
+        .confidence-medium { 
+            background: #f39c12; 
+            color: white; 
+            padding: 4px 8px; 
+            border-radius: 15px; 
+            font-size: 0.8em; 
+            font-weight: 600;
+        }
+        .confidence-low { 
+            background: #e74c3c; 
+            color: white; 
+            padding: 4px 8px; 
+            border-radius: 15px; 
+            font-size: 0.8em; 
+            font-weight: 600;
+        }
+        
+        .sync-badge { 
+            padding: 4px 8px; 
+            border-radius: 15px; 
+            font-size: 0.75em; 
+            font-weight: 600; 
+            margin-left: 8px;
+        }
+        .sync-online { background: #3498db; color: white; }
+        .sync-offline { background: #f39c12; color: white; }
+        
+        .loading { 
+            text-align: center; 
+            padding: 60px 20px; 
+            color: #7f8c8d;
+        }
+        .loading-spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #3498db;
+            border-radius: 50%;
+            width: 50px;
+            height: 50px;
+            animation: spin 1s linear infinite;
+            margin: 20px auto;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        .alert { 
+            padding: 15px; 
+            margin: 20px 0; 
+            border-radius: 8px; 
+            font-weight: 500;
+        }
+        .alert-info { 
+            background: #d6eaf8; 
+            color: #1b4f72; 
+            border-left: 5px solid #3498db;
+        }
+        .alert-success { 
+            background: #d5f4e6; 
+            color: #0e5233; 
+            border-left: 5px solid #27ae60;
+        }
+        .alert-warning { 
+            background: #fdeaa7; 
+            color: #7d6608; 
+            border-left: 5px solid #f39c12;
+        }
+        
+        .connection-status {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            padding: 10px 15px;
+            border-radius: 25px;
+            font-weight: 600;
+            font-size: 0.9em;
+            z-index: 1000;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+        }
+        .status-online { background: #27ae60; color: white; }
+        .status-offline { background: #e74c3c; color: white; }
+        
+        .auto-refresh-indicator {
+            display: inline-block;
+            margin-left: 10px;
+            padding: 5px 10px;
+            background: #3498db;
+            color: white;
+            border-radius: 15px;
+            font-size: 0.8em;
+            font-weight: 600;
+        }
+        
+        @media (max-width: 768px) {
+            .container { padding: 10px; }
+            .header h1 { font-size: 2em; }
+            .stats-grid { grid-template-columns: repeat(2, 1fr); gap: 15px; }
+            .stat-number { font-size: 2.5em; }
+            .filter-row { flex-direction: column; align-items: stretch; }
+            .filter-group { width: 100%; }
+            table { font-size: 0.85em; }
+            th, td { padding: 10px 8px; }
+        }
     </style>
 </head>
 <body>
-    <div class="header">
-        <h1>📋 Panel de Asistencia - Reconocimiento Facial</h1>
-        <p>Sistema con verificación de 85% de similitud facial - Sincronización automática offline</p>
+    <div class="connection-status" id="connectionStatus">
+        🌐 Conectado
     </div>
 
-    <div class="confidence-info">
+    <div class="header">
+        <h1>📋 Panel de Asistencia</h1>
+        <p>Sistema de Reconocimiento Facial con Sincronización Automática</p>
+    </div>
+
+    <div class="confidence-banner">
         <strong>🎯 Sistema de Alta Precisión:</strong> Todos los registros requieren al menos 85% de similitud facial para ser válidos
     </div>
 
-    <div class="auto-sync-status">
-        <strong>🔄 Sincronización Automática:</strong> Los registros offline se sincronizan automáticamente al restaurarse la conexión
-    </div>
+    <div class="container">
+        <div class="sync-status">
+            <strong>🔄 Sincronización Automática Activa:</strong> Los registros offline se sincronizan automáticamente al restaurarse la conexión. 
+            Panel actualizable cada 30 segundos para mostrar nuevos registros sincronizados.
+        </div>
 
-    <div class="stats">
-        <div class="stat-card">
-            <div class="stat-number" id="totalRecords">-</div>
-            <div>Total Registros</div>
+        <div class="stats-grid">
+            <div class="stat-card">
+                <span class="stat-number" id="totalRecords">-</span>
+                <div class="stat-label">Total Registros</div>
+            </div>
+            <div class="stat-card">
+                <span class="stat-number" id="totalEmployees">-</span>
+                <div class="stat-label">Empleados Activos</div>
+            </div>
+            <div class="stat-card">
+                <span class="stat-number" id="todayRecords">-</span>
+                <div class="stat-label">Registros Hoy</div>
+            </div>
+            <div class="stat-card">
+                <span class="stat-number" id="highConfidenceToday">-</span>
+                <div class="stat-label">Alta Confianza Hoy (≥90%)</div>
+            </div>
+            <div class="stat-card">
+                <span class="stat-number" id="syncedToday">-</span>
+                <div class="stat-label">Sincronizados Hoy</div>
+            </div>
+            <div class="stat-card">
+                <span class="stat-number" id="lastUpdate">-</span>
+                <div class="stat-label">Última Actualización</div>
+            </div>
         </div>
-        <div class="stat-card">
-            <div class="stat-number" id="totalEmployees">-</div>
-            <div>Empleados Activos</div>
-        </div>
-        <div class="stat-card">
-            <div class="stat-number" id="todayRecords">-</div>
-            <div>Registros Hoy</div>
-        </div>
-        <div class="stat-card">
-            <div class="stat-number" id="highConfidenceToday">-</div>
-            <div>Confianza ≥90% Hoy</div>
-        </div>
-        <div class="stat-card">
-            <div class="stat-number" id="lastUpdate">-</div>
-            <div>Última Actualización</div>
-        </div>
-    </div>
 
-    <div class="filters">
-        <label>Últimos días:</label>
-        <select id="daysFilter">
-            <option value="1">1 día</option>
-            <option value="3">3 días</option>
-            <option value="7" selected>7 días</option>
-            <option value="15">15 días</option>
-            <option value="30">30 días</option>
-        </select>
-        
-        <label>Empleado:</label>
-        <select id="employeeFilter">
-            <option value="">Todos los empleados</option>
-        </select>
-        
-        <button id="refreshBtn" onclick="loadData()">🔄 Actualizar</button>
-        <button onclick="toggleAutoRefresh()">🔄 Auto-actualizar (30s)</button>
-    </div>
-
-    <div class="table-container">
-        <div id="loading" class="loading">
-            <p>Cargando registros...</p>
+        <div class="controls">
+            <h3>🔍 Filtros y Controles</h3>
+            <div class="filter-row">
+                <div class="filter-group">
+                    <label>Período:</label>
+                    <select id="daysFilter">
+                        <option value="1">Último día</option>
+                        <option value="3">Últimos 3 días</option>
+                        <option value="7" selected>Últimos 7 días</option>
+                        <option value="15">Últimos 15 días</option>
+                        <option value="30">Último mes</option>
+                    </select>
+                </div>
+                
+                <div class="filter-group">
+                    <label>Empleado:</label>
+                    <select id="employeeFilter">
+                        <option value="">Todos los empleados</option>
+                    </select>
+                </div>
+                
+                <div class="filter-group">
+                    <label>Tipo:</label>
+                    <select id="typeFilter">
+                        <option value="">Todos los tipos</option>
+                        <option value="entrada">Solo Entradas</option>
+                        <option value="salida">Solo Salidas</option>
+                    </select>
+                </div>
+                
+                <div class="filter-group">
+                    <label>&nbsp;</label>
+                    <button class="btn btn-primary" onclick="loadData()">🔄 Actualizar Datos</button>
+                </div>
+                
+                <div class="filter-group">
+                    <label>&nbsp;</label>
+                    <button class="btn btn-success" id="autoRefreshBtn" onclick="toggleAutoRefresh()">
+                        ⚡ Auto-actualizar (30s)
+                    </button>
+                </div>
+            </div>
         </div>
-        <table id="recordsTable" style="display: none;">
-            <thead>
-                <tr>
-                    <th>Fecha/Hora</th>
-                    <th>Empleado</th>
-                    <th>ID</th>
-                    <th>Tipo</th>
-                    <th>Similitud Facial</th>
-                    <th>Estado/Notas</th>
-                </tr>
-            </thead>
-            <tbody id="recordsBody">
-            </tbody>
-        </table>
+
+        <div id="alertContainer"></div>
+
+        <div class="table-container">
+            <div class="table-header">
+                📊 Registros de Asistencia con Reconocimiento Facial
+            </div>
+            
+            <div id="loading" class="loading">
+                <div class="loading-spinner"></div>
+                <p>Cargando registros de asistencia...</p>
+            </div>
+            
+            <div id="tableWrapper" style="display: none;">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>📅 Fecha/Hora</th>
+                            <th>👤 Empleado</th>
+                            <th>🆔 ID</th>
+                            <th>🏢 Departamento</th>
+                            <th>📋 Tipo</th>
+                            <th>🎯 Similitud Facial</th>
+                            <th>📍 Estado/Origen</th>
+                            <th>📝 Notas</th>
+                        </tr>
+                    </thead>
+                    <tbody id="recordsBody">
+                    </tbody>
+                </table>
+            </div>
+        </div>
     </div>
 
     <script>
         let autoRefreshInterval = null;
+        let isOnline = navigator.onLine;
+
+        // Monitoreo de conexión
+        function updateConnectionStatus() {
+            const statusEl = document.getElementById('connectionStatus');
+            if (navigator.onLine) {
+                statusEl.textContent = '🌐 Conectado';
+                statusEl.className = 'connection-status status-online';
+                isOnline = true;
+            } else {
+                statusEl.textContent = '📱 Desconectado';
+                statusEl.className = 'connection-status status-offline';
+                isOnline = false;
+            }
+        }
+
+        window.addEventListener('online', () => {
+            updateConnectionStatus();
+            showAlert('Conexión restaurada - Los registros offline se sincronizarán automáticamente', 'success');
+            setTimeout(loadData, 2000);
+        });
+
+        window.addEventListener('offline', () => {
+            updateConnectionStatus();
+            showAlert('Conexión perdida - Los nuevos registros se guardarán offline', 'warning');
+        });
+
+        function showAlert(message, type = 'info') {
+            const container = document.getElementById('alertContainer');
+            const alert = document.createElement('div');
+            alert.className = `alert alert-${type}`;
+            alert.innerHTML = `<strong>${getAlertIcon(type)}</strong> ${message}`;
+            
+            container.appendChild(alert);
+            setTimeout(() => {
+                alert.style.opacity = '0';
+                alert.style.transform = 'translateY(-20px)';
+                setTimeout(() => container.removeChild(alert), 300);
+            }, 5000);
+        }
+
+        function getAlertIcon(type) {
+            switch(type) {
+                case 'success': return '✅';
+                case 'warning': return '⚠️';
+                case 'error': return '❌';
+                default: return 'ℹ️';
+            }
+        }
 
         async function loadData() {
             const loading = document.getElementById('loading');
-            const table = document.getElementById('recordsTable');
+            const tableWrapper = document.getElementById('tableWrapper');
             const tbody = document.getElementById('recordsBody');
             
             loading.style.display = 'block';
-            table.style.display = 'none';
+            tableWrapper.style.display = 'none';
 
             try {
                 // Obtener parámetros de filtro
                 const days = document.getElementById('daysFilter').value;
                 const employeeId = document.getElementById('employeeFilter').value;
+                const typeFilter = document.getElementById('typeFilter').value;
                 
                 // Construir URL con filtros
                 let url = '/api/attendance-records/?days=' + days;
                 if (employeeId) url += '&employee_id=' + employeeId;
 
-                // Cargar registros
-                const recordsResponse = await fetch(url);
-                const recordsData = await recordsResponse.json();
+                // Cargar datos paralelos
+                const [recordsResponse, employeesResponse] = await Promise.all([
+                    fetch(url),
+                    fetch('/api/employees/')
+                ]);
 
-                // Cargar empleados
-                const employeesResponse = await fetch('/api/employees/');
+                const recordsData = await recordsResponse.json();
                 const employeesData = await employeesResponse.json();
 
-                if (recordsData.success) {
-                    // Actualizar estadísticas
-                    document.getElementById('totalRecords').textContent = recordsData.total;
-                    document.getElementById('totalEmployees').textContent = employeesData.employees?.length || 0;
-                    
-                    // Contar registros de hoy
-                    const today = new Date().toISOString().split('T')[0];
-                    const todayRecords = recordsData.records.filter(r => 
-                        r.timestamp.startsWith(today)
-                    );
-                    document.getElementById('todayRecords').textContent = todayRecords.length;
-                    
-                    // Contar registros de alta confianza hoy (≥90%)
-                    const highConfidenceToday = todayRecords.filter(r => {
-                        const confidence = parseFloat(r.confidence_percentage.replace('%', ''));
-                        return confidence >= 90;
-                    }).length;
-                    document.getElementById('highConfidenceToday').textContent = highConfidenceToday;
-                    
-                    document.getElementById('lastUpdate').textContent = 
-                        new Date().toLocaleTimeString('es-CL');
-
-                    // Llenar tabla
-                    tbody.innerHTML = '';
-                    recordsData.records.forEach(record => {
-                        const row = tbody.insertRow();
-                        
-                        // Formatear fecha
-                        const date = new Date(record.timestamp);
-                        const formattedDate = date.toLocaleString('es-CL');
-                        
-                        // Determinar si es sincronización offline
-                        const isOfflineSync = record.notes && record.notes.includes('Sync offline');
-                        
-                        // Determinar nivel de confianza
-                        const confidence = parseFloat(record.confidence_percentage.replace('%', ''));
-                        let confidenceClass = 'low-confidence';
-                        if (confidence >= 95) confidenceClass = 'high-confidence';
-                        else if (confidence >= 85) confidenceClass = 'medium-confidence';
-                        
-                        row.innerHTML = `
-                            <td>${formattedDate}</td>
-                            <td><strong>${record.employee_name}</strong></td>
-                            <td>${record.employee_id}</td>
-                            <td><span class="${record.attendance_type}">${record.attendance_type.toUpperCase()}</span></td>
-                            <td><span class="${confidenceClass}">${record.confidence_percentage}</span></td>
-                            <td>
-                                ${record.notes || 'Registro normal'}
-                                ${isOfflineSync ? 
-                                    '<span class="sync-indicator sync-offline">📱 Sincronizado</span>' : 
-                                    '<span class="sync-indicator sync-normal">🌐 Online</span>'
-                                }
-                            </td>
-                        `;
-                    });
-
-                    // Actualizar filtro de empleados
-                    const employeeFilter = document.getElementById('employeeFilter');
-                    const currentValue = employeeFilter.value;
-                    employeeFilter.innerHTML = '<option value="">Todos los empleados</option>';
-                    
-                    if (employeesData.success) {
-                        employeesData.employees.forEach(emp => {
-                            const option = document.createElement('option');
-                            option.value = emp.id;
-                            option.textContent = `${emp.name} (${emp.employee_id})`;
-                            if (emp.id === currentValue) option.selected = true;
-                            employeeFilter.appendChild(option);
-                        });
+                if (recordsData.success && employeesData.success) {
+                    // Filtrar por tipo si se especifica
+                    let filteredRecords = recordsData.records;
+                    if (typeFilter) {
+                        filteredRecords = recordsData.records.filter(r => r.attendance_type === typeFilter);
                     }
 
+                    updateStatistics(recordsData, employeesData, filteredRecords);
+                    updateEmployeeFilter(employeesData.employees);
+                    renderRecordsTable(filteredRecords);
+
                     loading.style.display = 'none';
-                    table.style.display = 'table';
+                    tableWrapper.style.display = 'block';
+
+                    // Mostrar alerta de sincronización si hay registros recientes
+                    const recentSynced = filteredRecords.filter(r => 
+                        r.notes && r.notes.includes('Sync offline') &&
+                        new Date(r.timestamp).toDateString() === new Date().toDateString()
+                    );
+                    
+                    if (recentSynced.length > 0) {
+                        showAlert(`Se detectaron ${recentSynced.length} registros sincronizados automáticamente hoy`, 'success');
+                    }
                 } else {
-                    throw new Error(recordsData.message || 'Error cargando datos');
+                    throw new Error(recordsData.message || employeesData.message || 'Error cargando datos');
                 }
             } catch (error) {
                 console.error('Error:', error);
-                loading.innerHTML = '<p style="color: red;">Error cargando datos: ' + error.message + '</p>';
+                loading.innerHTML = `
+                    <div class="alert alert-error">
+                        <strong>❌ Error:</strong> ${error.message}
+                        <br><br>
+                        <button class="btn btn-primary" onclick="loadData()">🔄 Reintentar</button>
+                    </div>
+                `;
+                showAlert('Error cargando datos: ' + error.message, 'error');
             }
         }
 
+        function updateStatistics(recordsData, employeesData, filteredRecords) {
+            // Total de registros
+            document.getElementById('totalRecords').textContent = recordsData.total.toLocaleString();
+            document.getElementById('totalEmployees').textContent = employeesData.employees.length;
+
+            // Registros de hoy
+            const today = new Date().toISOString().split('T')[0];
+            const todayRecords = filteredRecords.filter(r => r.timestamp.startsWith(today));
+            document.getElementById('todayRecords').textContent = todayRecords.length;
+
+            // Alta confianza hoy (≥90%)
+            const highConfidenceToday = todayRecords.filter(r => {
+                const confidence = parseFloat(r.confidence_percentage.replace('%', ''));
+                return confidence >= 90;
+            }).length;
+            document.getElementById('highConfidenceToday').textContent = highConfidenceToday;
+
+            // Registros sincronizados hoy
+            const syncedToday = todayRecords.filter(r => 
+                r.notes && r.notes.includes('Sync offline')
+            ).length;
+            document.getElementById('syncedToday').textContent = syncedToday;
+
+            // Última actualización
+            document.getElementById('lastUpdate').textContent = 
+                new Date().toLocaleTimeString('es-CL', { 
+                    hour: '2-digit', 
+                    minute: '2-digit',
+                    second: '2-digit'
+                });
+        }
+
+        function updateEmployeeFilter(employees) {
+            const employeeFilter = document.getElementById('employeeFilter');
+            const currentValue = employeeFilter.value;
+            
+            // Mantener opción "Todos"
+            employeeFilter.innerHTML = '<option value="">Todos los empleados</option>';
+            
+            employees.forEach(emp => {
+                const option = document.createElement('option');
+                option.value = emp.id;
+                option.textContent = `${emp.name} (${emp.employee_id})`;
+                if (emp.id === currentValue) option.selected = true;
+                employeeFilter.appendChild(option);
+            });
+        }
+
+        function renderRecordsTable(records) {
+            const tbody = document.getElementById('recordsBody');
+            tbody.innerHTML = '';
+
+            if (records.length === 0) {
+                tbody.innerHTML = `
+                    <tr>
+                        <td colspan="8" style="text-align: center; padding: 40px; color: #7f8c8d; font-style: italic;">
+                            📭 No hay registros que coincidan con los filtros seleccionados
+                        </td>
+                    </tr>
+                `;
+                return;
+            }
+
+            records.forEach((record, index) => {
+                const row = tbody.insertRow();
+                row.style.animation = `slideIn 0.3s ease ${index * 0.05}s both`;
+                
+                // Formatear fecha
+                const date = new Date(record.timestamp);
+                const formattedDate = date.toLocaleString('es-CL', {
+                    year: 'numeric',
+                    month: '2-digit',
+                    day: '2-digit',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    second: '2-digit'
+                });
+                
+                // Determinar si es sincronización offline
+                const isOfflineSync = record.notes && record.notes.includes('Sync offline');
+                
+                // Determinar nivel de confianza
+                const confidence = parseFloat(record.confidence_percentage.replace('%', ''));
+                let confidenceClass = 'confidence-low';
+                if (confidence >= 95) confidenceClass = 'confidence-high';
+                else if (confidence >= 85) confidenceClass = 'confidence-medium';
+                
+                // Icono y clase del tipo
+                const typeIcon = record.attendance_type === 'entrada' ? '📥' : '📤';
+                const typeClass = `status-${record.attendance_type}`;
+                
+                row.innerHTML = `
+                    <td>${formattedDate}</td>
+                    <td><strong>${record.employee_name}</strong></td>
+                    <td><code>${record.employee_id || 'N/A'}</code></td>
+                    <td>${record.employee_department || 'N/A'}</td>
+                    <td>
+                        <span class="${typeClass}">
+                            ${typeIcon} ${record.attendance_type.toUpperCase()}
+                        </span>
+                    </td>
+                    <td>
+                        <span class="${confidenceClass}">${record.confidence_percentage}</span>
+                    </td>
+                    <td>
+                        ${isOfflineSync ? 
+                            '<span class="sync-badge sync-offline">📱 Sincronizado</span>' : 
+                            '<span class="sync-badge sync-online">🌐 En Línea</span>'
+                        }
+                    </td>
+                    <td style="font-size: 0.9em; max-width: 200px; overflow: hidden; text-overflow: ellipsis;">
+                        ${record.notes || 'Registro normal'}
+                    </td>
+                `;
+            });
+        }
+
         function toggleAutoRefresh() {
-            const button = document.querySelector('button[onclick="toggleAutoRefresh()"]');
+            const button = document.getElementById('autoRefreshBtn');
             
             if (autoRefreshInterval) {
                 clearInterval(autoRefreshInterval);
                 autoRefreshInterval = null;
-                button.textContent = '🔄 Auto-actualizar (30s)';
+                button.innerHTML = '⚡ Auto-actualizar (30s)';
+                button.className = 'btn btn-success';
+                showAlert('Auto-actualización desactivada', 'info');
             } else {
-                autoRefreshInterval = setInterval(loadData, 30000);
-                button.textContent = '⏹️ Detener auto-actualizar';
+                autoRefreshInterval = setInterval(() => {
+                    loadData();
+                }, 30000);
+                button.innerHTML = '⏹️ Detener Auto-actualizar';
+                button.className = 'btn btn-warning';
+                showAlert('Auto-actualización activada - Se actualizará cada 30 segundos', 'success');
                 loadData(); // Cargar inmediatamente
             }
         }
@@ -236,18 +644,34 @@
         // Event listeners para filtros
         document.getElementById('daysFilter').addEventListener('change', loadData);
         document.getElementById('employeeFilter').addEventListener('change', loadData);
+        document.getElementById('typeFilter').addEventListener('change', loadData);
 
-        // Cargar datos al inicio
+        // CSS para animaciones
+        const style = document.createElement('style');
+        style.textContent = `
+            @keyframes slideIn {
+                from {
+                    opacity: 0;
+                    transform: translateX(-20px);
+                }
+                to {
+                    opacity: 1;
+                    transform: translateX(0);
+                }
+            }
+            
+            .alert {
+                transition: all 0.3s ease;
+            }
+        `;
+        document.head.appendChild(style);
+
+        // Inicializar
+        updateConnectionStatus();
         loadData();
-
-        // Mostrar estado de conexión
-        window.addEventListener('online', function() {
-            console.log('Conexión restaurada - Los registros offline se sincronizarán automáticamente');
-        });
-
-        window.addEventListener('offline', function() {
-            console.log('Conexión perdida - Los registros se guardarán offline');
-        });
+        
+        // Actualizar estado de conexión periódicamente
+        setInterval(updateConnectionStatus, 5000);
     </script>
 </body>
 </html>

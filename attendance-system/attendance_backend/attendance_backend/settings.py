@@ -89,14 +89,13 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 # CORS Settings
 CORS_ALLOWED_ORIGINS = [
-    "http://192.168.18.124:8081",
+    "http://192.168.96.36:8081",
+    "http://192.168.96.36:19006", 
     "http://127.0.0.1:19006",
     "http://localhost:19006",
-    "http://192.168.18.124:19006",
 ]
 
 CORS_ALLOW_ALL_ORIGINS = True
-CORS_ALLOW_CREDENTIALS = True
 
 # REST Framework
 REST_FRAMEWORK = {
