@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   View, 
   Text, 
@@ -8,12 +8,16 @@ import {
   ScrollView,
   Modal,
   TextInput,
-  ActivityIndicator 
+  ActivityIndicator,
+  Image,
+  Platform
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import NetInfo from '@react-native-community/netinfo';
 import * as Location from 'expo-location';
+import { Camera, CameraView } from 'expo-camera';
+import * as ImageManipulator from 'expo-image-manipulator';
 
 // CAMBIA POR TU IP LOCAL
 const API_BASE_URL = 'http://192.168.96.36:8000/api';
@@ -24,6 +28,8 @@ interface Employee {
   employee_id: string;
   department: string;
   position: string;
+  has_face_registered?: boolean;
+  face_registration_date?: string;
 }
 
 interface AttendanceRecord {
@@ -36,27 +42,26 @@ interface AttendanceRecord {
   location_lng: number;
   address: string;
   is_offline_sync: boolean;
+  face_confidence?: number;
 }
 
 interface OfflineRecord {
   local_id: string;
-  employee_name: string;
+  employee_name?: string;
+  employee_id?: string;
   type: string;
   timestamp: string;
   latitude?: number;
   longitude?: number;
   address: string;
   notes: string;
+  photo?: string;
 }
 
-interface PendingEmployee {
-  name: string;
-  department: string;
-  local_id: string;
-  created_offline: boolean;
-}
+type CameraModeType = 'register' | 'verify' | 'new-employee' | null;
 
 export default function App() {
+  // Estados principales
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [selectedEmployee, setSelectedEmployee] = useState<Employee | null>(null);
   const [attendanceHistory, setAttendanceHistory] = useState<AttendanceRecord[]>([]);
@@ -64,14 +69,25 @@ export default function App() {
   const [isOnline, setIsOnline] = useState(true);
   const [isSyncing, setIsSyncing] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
-  const [currentLocation, setCurrentLocation] = useState<string>('Obteniendo ubicacion...');
+  const [currentLocation, setCurrentLocation] = useState<string>('Obteniendo ubicación...');
   const [coordinates, setCoordinates] = useState<{lat: number, lng: number} | null>(null);
   
-  // Estados para modal de empleado
+  // Estados para cámara y reconocimiento facial
+  const [hasCameraPermission, setHasCameraPermission] = useState<boolean | null>(null);
+  const [showCamera, setShowCamera] = useState(false);
+  const [facing, setFacing] = useState<'front' | 'back'>('front');
+  const [isProcessingPhoto, setIsProcessingPhoto] = useState(false);
+  const [cameraMode, setCameraMode] = useState<CameraModeType>(null);
+  const [pendingAttendanceType, setPendingAttendanceType] = useState<'entrada' | 'salida'>('entrada');
+  const cameraRef = useRef<CameraView>(null);
+  
+  // Estados para modales
   const [showEmployeeModal, setShowEmployeeModal] = useState(false);
   const [showNewEmployeeModal, setShowNewEmployeeModal] = useState(false);
   const [newEmployeeName, setNewEmployeeName] = useState('');
   const [newEmployeeDepartment, setNewEmployeeDepartment] = useState('');
+  const [newEmployeePhoto, setNewEmployeePhoto] = useState<string | null>(null);
+  const [useFacialRecognition, setUseFacialRecognition] = useState(true);
 
   useEffect(() => {
     initializeApp();
@@ -80,22 +96,24 @@ export default function App() {
   const initializeApp = async () => {
     await loadStoredData();
     await setupLocation();
+    await setupCamera();
     setupNetworkListener();
     await loadEmployees();
   };
 
+  const setupCamera = async () => {
+    const { status } = await Camera.requestCameraPermissionsAsync();
+    setHasCameraPermission(status === 'granted');
+  };
+
   const setupLocation = async () => {
     try {
-      console.log('Solicitando permisos de ubicacion...');
-      
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== 'granted') {
-        setCurrentLocation('Sin permisos de ubicacion');
+        setCurrentLocation('Sin permisos de ubicación');
         return;
       }
 
-      console.log('Permisos concedidos, obteniendo ubicacion...');
-      
       const location = await Location.getCurrentPositionAsync({
         accuracy: Location.Accuracy.High,
       });
@@ -103,9 +121,6 @@ export default function App() {
       const { latitude, longitude } = location.coords;
       setCoordinates({ lat: latitude, lng: longitude });
 
-      console.log(`Ubicacion obtenida: ${latitude}, ${longitude}`);
-
-      // Obtener direccion legible
       try {
         const addresses = await Location.reverseGeocodeAsync({
           latitude,
@@ -116,18 +131,15 @@ export default function App() {
           const address = addresses[0];
           const fullAddress = `${address.street || ''} ${address.streetNumber || ''}, ${address.city || ''}, ${address.region || ''}`.trim();
           setCurrentLocation(fullAddress || `${latitude.toFixed(6)}, ${longitude.toFixed(6)}`);
-          console.log('Direccion obtenida:', fullAddress);
         } else {
           setCurrentLocation(`${latitude.toFixed(6)}, ${longitude.toFixed(6)}`);
         }
       } catch (error) {
-        console.log('Error obteniendo direccion, usando coordenadas');
         setCurrentLocation(`${latitude.toFixed(6)}, ${longitude.toFixed(6)}`);
       }
-
     } catch (error) {
-      console.error('Error obteniendo ubicacion:', error);
-      setCurrentLocation('Error obteniendo ubicacion');
+      console.error('Error obteniendo ubicación:', error);
+      setCurrentLocation('Error obteniendo ubicación');
     }
   };
 
@@ -138,16 +150,11 @@ export default function App() {
       
       setIsOnline(nowOnline || false);
       
-      // Auto-sincronizar cuando vuelve la conexion
       if (wasOffline && nowOnline) {
         setTimeout(async () => {
-          // Sincronizar empleados offline primero
-          await syncOfflineEmployees();
-          // Luego sincronizar registros de asistencia
           if (offlineRecords.length > 0) {
             syncOfflineRecords();
           }
-          // Recargar empleados del servidor
           await loadEmployees();
         }, 2000);
       }
@@ -164,6 +171,9 @@ export default function App() {
 
       const storedEmployee = await AsyncStorage.getItem('selectedEmployee');
       if (storedEmployee) setSelectedEmployee(JSON.parse(storedEmployee));
+      
+      const storedUseFacial = await AsyncStorage.getItem('useFacialRecognition');
+      if (storedUseFacial !== null) setUseFacialRecognition(JSON.parse(storedUseFacial));
     } catch (error) {
       console.error('Error loading data:', error);
     }
@@ -192,113 +202,373 @@ export default function App() {
     }
   };
 
+  const takePicture = async () => {
+    if (!cameraRef.current) return;
+    
+    try {
+      setIsProcessingPhoto(true);
+      
+      // Capturar foto usando el nuevo método
+      const photo = await cameraRef.current.takePictureAsync({
+        quality: 0.7,
+        base64: true,
+        skipProcessing: false
+      });
+      
+      if (!photo || !photo.base64) {
+        throw new Error('No se pudo obtener la imagen');
+      }
+      
+      // Procesar imagen
+      const manipulated = await ImageManipulator.manipulateAsync(
+        photo.uri,
+        [
+          { resize: { width: 600 } },
+          ...(facing === 'front' ? [{ flip: ImageManipulator.FlipType.Horizontal }] : [])
+        ],
+        { 
+          compress: 0.7,
+          format: ImageManipulator.SaveFormat.JPEG,
+          base64: true
+        }
+      );
+      
+      if (!manipulated.base64) {
+        throw new Error('No se pudo procesar la imagen');
+      }
+      
+      const photoData = `data:image/jpeg;base64,${manipulated.base64}`;
+      
+      // Cerrar cámara
+      setShowCamera(false);
+      
+      // Procesar según el modo
+      if (cameraMode === 'register') {
+        await registerEmployeeFace(photoData);
+      } else if (cameraMode === 'verify') {
+        await verifyAndMarkAttendance(photoData, pendingAttendanceType);
+      } else if (cameraMode === 'new-employee') {
+        setNewEmployeePhoto(photoData);
+        setShowNewEmployeeModal(true);
+      }
+      
+    } catch (error) {
+      console.error('Error capturando foto:', error);
+      Alert.alert('Error', 'No se pudo capturar la foto. Intenta nuevamente.');
+    } finally {
+      setIsProcessingPhoto(false);
+      setCameraMode(null);
+    }
+  };
+
+  const registerEmployeeFace = async (photoData: string) => {
+    if (!selectedEmployee) {
+      Alert.alert('Error', 'Primero selecciona un empleado');
+      return;
+    }
+    
+    setIsProcessingPhoto(true);
+    
+    try {
+      console.log('Registrando rostro para:', selectedEmployee.name);
+      
+      const response = await fetch(`${API_BASE_URL}/register-face/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          employee_id: selectedEmployee.id,
+          photo: photoData
+        })
+      });
+      
+      const data = await response.json();
+      
+      if (data.success) {
+        // Actualizar empleado localmente
+        setEmployees(prev => prev.map(emp => 
+          emp.id === selectedEmployee.id 
+            ? { ...emp, has_face_registered: true }
+            : emp
+        ));
+        
+        setSelectedEmployee({
+          ...selectedEmployee,
+          has_face_registered: true
+        });
+        
+        Alert.alert(
+          '✅ Registro Exitoso',
+          `Rostro registrado correctamente para ${selectedEmployee.name}\n\nAhora puedes usar reconocimiento facial para marcar asistencia.`,
+          [{ text: 'Excelente!' }]
+        );
+      } else {
+        Alert.alert(
+          'Error en Registro',
+          data.message || 'No se pudo registrar el rostro',
+          data.tips ? [
+            { text: 'Reintentar', onPress: () => openCamera('register') },
+            { text: 'Cancelar', style: 'cancel' }
+          ] : [{ text: 'OK' }]
+        );
+      }
+    } catch (error) {
+      console.error('Error registrando rostro:', error);
+      Alert.alert('Error', 'Error conectando con el servidor');
+    } finally {
+      setIsProcessingPhoto(false);
+    }
+  };
+
+  const verifyAndMarkAttendance = async (photoData: string, type: 'entrada' | 'salida') => {
+    const now = new Date();
+    const timestamp = now.toISOString();
+    
+    // Si está offline, guardar con foto
+    if (!isOnline) {
+      const offlineRecord: OfflineRecord = {
+        local_id: `offline_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        type: type,
+        timestamp: timestamp,
+        latitude: coordinates?.lat,
+        longitude: coordinates?.lng,
+        address: currentLocation,
+        notes: 'Verificación facial offline',
+        photo: photoData
+      };
+      
+      const updatedOfflineRecords = [...offlineRecords, offlineRecord];
+      setOfflineRecords(updatedOfflineRecords);
+      await saveToStorage('offlineRecords', updatedOfflineRecords);
+      
+      Alert.alert(
+        '📴 Registro Offline',
+        `${type.toUpperCase()} guardada con foto\n\nSe verificará automáticamente cuando vuelva la conexión.`,
+        [{ text: 'OK' }]
+      );
+      return;
+    }
+    
+    setIsProcessingPhoto(true);
+    
+    try {
+      console.log('Verificando rostro para:', type);
+      
+      const response = await fetch(`${API_BASE_URL}/verify-face/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          photo: photoData,
+          type: type,
+          latitude: coordinates?.lat,
+          longitude: coordinates?.lng,
+          address: currentLocation
+        })
+      });
+      
+      const data = await response.json();
+      
+      if (data.success) {
+        // Crear registro local
+        const newRecord: AttendanceRecord = {
+          id: data.record.id,
+          employee_name: data.employee.name,
+          attendance_type: type,
+          timestamp: now.toLocaleString('es-CL'),
+          formatted_timestamp: data.record.formatted_timestamp,
+          location_lat: coordinates?.lat || 0,
+          location_lng: coordinates?.lng || 0,
+          address: currentLocation,
+          is_offline_sync: false,
+          face_confidence: parseFloat(data.confidence?.replace('%', '') || '0') / 100
+        };
+        
+        const updatedHistory = [newRecord, ...attendanceHistory].slice(0, 50);
+        setAttendanceHistory(updatedHistory);
+        await saveToStorage('attendanceHistory', updatedHistory);
+        
+        Alert.alert(
+          '✅ Asistencia Registrada',
+          `${type.toUpperCase()} marcada exitosamente\n\n👤 ${data.employee.name}\n🏢 ${data.employee.department}\n🎯 Confianza: ${data.confidence}\n📍 ${currentLocation}`,
+          [{ text: 'Perfecto!' }]
+        );
+      } else {
+        Alert.alert(
+          '❌ No Reconocido',
+          `${data.message}\n\nConfianza obtenida: ${data.best_confidence || 'N/A'}\nMínimo requerido: ${data.required_confidence || '35%'}`,
+          data.suggestions ? [
+            { text: 'Reintentar', onPress: () => {
+              setPendingAttendanceType(type);
+              openCamera('verify');
+            }},
+            { text: 'Usar Modo Manual', onPress: () => setUseFacialRecognition(false) },
+            { text: 'Cancelar', style: 'cancel' }
+          ] : [{ text: 'OK' }]
+        );
+      }
+    } catch (error) {
+      console.error('Error verificando rostro:', error);
+      Alert.alert('Error', 'Error conectando con el servidor');
+    } finally {
+      setIsProcessingPhoto(false);
+    }
+  };
+
+  const openCamera = (mode: 'register' | 'verify' | 'new-employee') => {
+    if (!hasCameraPermission) {
+      Alert.alert('Sin permisos', 'Se requieren permisos de cámara para esta función');
+      return;
+    }
+    
+    setCameraMode(mode);
+    setShowCamera(true);
+  };
+
+  const markAttendanceManual = async (type: 'entrada' | 'salida') => {
+    if (!selectedEmployee) {
+      Alert.alert('Error', 'Primero selecciona un empleado');
+      return;
+    }
+    
+    const now = new Date();
+    const timestamp = now.toISOString();
+    
+    if (!isOnline) {
+      // Guardar offline sin foto
+      const offlineRecord: OfflineRecord = {
+        local_id: `offline_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        employee_name: selectedEmployee.name,
+        employee_id: selectedEmployee.employee_id,
+        type: type,
+        timestamp: timestamp,
+        latitude: coordinates?.lat,
+        longitude: coordinates?.lng,
+        address: currentLocation,
+        notes: 'Registro manual offline'
+      };
+      
+      const updatedOfflineRecords = [...offlineRecords, offlineRecord];
+      setOfflineRecords(updatedOfflineRecords);
+      await saveToStorage('offlineRecords', updatedOfflineRecords);
+      
+      Alert.alert(
+        '📴 Registro Offline',
+        `${type.toUpperCase()} guardada localmente\n\n${selectedEmployee.name}\n\nSe sincronizará cuando vuelva la conexión.`,
+        [{ text: 'OK' }]
+      );
+      return;
+    }
+    
+    // Enviar online
+    try {
+      const response = await fetch(`${API_BASE_URL}/mark-attendance/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          employee_name: selectedEmployee.name,
+          employee_id: selectedEmployee.employee_id,
+          type: type,
+          timestamp: timestamp,
+          latitude: coordinates?.lat,
+          longitude: coordinates?.lng,
+          address: currentLocation
+        })
+      });
+      
+      const data = await response.json();
+      
+      if (data.success) {
+        const newRecord: AttendanceRecord = {
+          id: data.record.id,
+          employee_name: data.record.employee_name,
+          attendance_type: data.record.attendance_type,
+          timestamp: now.toLocaleString('es-CL'),
+          formatted_timestamp: data.record.formatted_timestamp,
+          location_lat: coordinates?.lat || 0,
+          location_lng: coordinates?.lng || 0,
+          address: currentLocation,
+          is_offline_sync: false,
+          face_confidence: 0
+        };
+        
+        const updatedHistory = [newRecord, ...attendanceHistory].slice(0, 50);
+        setAttendanceHistory(updatedHistory);
+        await saveToStorage('attendanceHistory', updatedHistory);
+        
+        Alert.alert(
+          '✅ Registro Exitoso',
+          `${type.toUpperCase()} registrada\n\n${selectedEmployee.name}\n${currentLocation}`,
+          [{ text: 'OK' }]
+        );
+      } else {
+        Alert.alert('Error', data.message);
+      }
+    } catch (error) {
+      console.error('Error enviando registro:', error);
+      Alert.alert('Error', 'Error conectando con el servidor');
+    }
+  };
+
   const createEmployee = async () => {
     if (!newEmployeeName.trim()) {
       Alert.alert('Error', 'El nombre es requerido');
       return;
     }
-
+    
     setIsLoading(true);
     
     try {
-      if (isOnline) {
-        // Crear empleado online directamente en el servidor
-        console.log(`Creando empleado online: ${newEmployeeName.trim()}`);
-        
-        const response = await fetch(`${API_BASE_URL}/create-employee/`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            name: newEmployeeName.trim(),
-            department: newEmployeeDepartment.trim() || 'General',
-          })
-        });
-
-        const data = await response.json();
-        
-        if (data.success) {
-          console.log(`Empleado creado en servidor: ${data.employee.name} (${data.employee.employee_id})`);
-          
-          // Agregar el empleado a la lista local
-          const newEmployee: Employee = {
-            id: data.employee.id,
-            name: data.employee.name,
-            employee_id: data.employee.employee_id,
-            department: data.employee.department,
-            position: data.employee.position
-          };
-          
-          setEmployees(prev => [...prev, newEmployee]);
-          
-          Alert.alert(
-            'Empleado Creado', 
-            `${data.employee.name} creado correctamente\nID: ${data.employee.employee_id}\n\nYa puede marcar asistencia inmediatamente.`,
-            [
-              {
-                text: 'Seleccionar Ahora',
-                onPress: () => selectEmployee(newEmployee)
-              },
-              {
-                text: 'OK',
-                style: 'cancel'
-              }
-            ]
-          );
-          
-          setNewEmployeeName('');
-          setNewEmployeeDepartment('');
-          setShowNewEmployeeModal(false);
-        } else {
-          Alert.alert('Error', data.message);
-        }
-      } else {
-        // Crear empleado offline (se sincronizara cuando haya conexion)
-        console.log(`Creando empleado offline: ${newEmployeeName.trim()}`);
-        
-        const offlineEmployeeId = `OFFLINE_${Date.now()}_${Math.random().toString(36).substr(2, 6).toUpperCase()}`;
-        
-        const offlineEmployee: Employee = {
-          id: offlineEmployeeId,
-          name: newEmployeeName.trim(),
-          employee_id: offlineEmployeeId,
-          department: newEmployeeDepartment.trim() || 'General',
-          position: 'Empleado'
+      const employeeData: any = {
+        name: newEmployeeName.trim(),
+        department: newEmployeeDepartment.trim() || 'General',
+      };
+      
+      // Incluir foto si se tomó una
+      if (newEmployeePhoto) {
+        employeeData.photo = newEmployeePhoto;
+      }
+      
+      const response = await fetch(`${API_BASE_URL}/create-employee/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(employeeData)
+      });
+      
+      const data = await response.json();
+      
+      if (data.success) {
+        const newEmployee: Employee = {
+          id: data.employee.id,
+          name: data.employee.name,
+          employee_id: data.employee.employee_id,
+          department: data.employee.department,
+          position: data.employee.position,
+          has_face_registered: data.face_registered || false
         };
         
-        // Agregar a lista local
-        setEmployees(prev => [...prev, offlineEmployee]);
-        
-        // Guardar para sincronizacion posterior
-        const pendingEmployees = await AsyncStorage.getItem('pendingEmployees');
-        const currentPending = pendingEmployees ? JSON.parse(pendingEmployees) : [];
-        currentPending.push({
-          name: newEmployeeName.trim(),
-          department: newEmployeeDepartment.trim() || 'General',
-          local_id: offlineEmployeeId,
-          created_offline: true
-        });
-        await AsyncStorage.setItem('pendingEmployees', JSON.stringify(currentPending));
+        setEmployees(prev => [...prev, newEmployee]);
         
         Alert.alert(
-          'Empleado Creado Offline',
-          `${offlineEmployee.name} creado localmente\n\nSe sincronizara automaticamente cuando vuelva la conexion.`,
+          '✅ Empleado Creado',
+          `${data.employee.name} creado exitosamente\n\nID: ${data.employee.employee_id}${data.face_registered ? '\n✅ Con rostro registrado' : '\n⚠️ Sin rostro registrado'}`,
           [
-            {
-              text: 'Seleccionar Ahora',
-              onPress: () => selectEmployee(offlineEmployee)
+            { 
+              text: 'Seleccionar', 
+              onPress: () => {
+                setSelectedEmployee(newEmployee);
+                saveToStorage('selectedEmployee', newEmployee);
+              }
             },
-            {
-              text: 'OK',
-              style: 'cancel'
-            }
+            { text: 'OK', style: 'cancel' }
           ]
         );
         
+        // Limpiar formulario
         setNewEmployeeName('');
         setNewEmployeeDepartment('');
+        setNewEmployeePhoto(null);
         setShowNewEmployeeModal(false);
+      } else {
+        Alert.alert('Error', data.message);
       }
     } catch (error) {
       console.error('Error creando empleado:', error);
@@ -312,300 +582,96 @@ export default function App() {
     setSelectedEmployee(employee);
     await saveToStorage('selectedEmployee', employee);
     setShowEmployeeModal(false);
-    Alert.alert('Empleado Seleccionado', `${employee.name} seleccionado para marcar asistencia`);
-  };
-
-  const markAttendance = async (type: 'entrada' | 'salida') => {
-    if (!selectedEmployee) {
-      Alert.alert('Error', 'Primero selecciona un empleado');
-      return;
-    }
-
-    console.log(`Marcando ${type} para ${selectedEmployee.name}`);
-    console.log(`Ubicacion: ${currentLocation}`);
-    if (coordinates) {
-      console.log(`Coordenadas: ${coordinates.lat}, ${coordinates.lng}`);
-    }
-
-    const now = new Date();
-    const timestamp = now.toISOString();
-
-    if (!isOnline) {
-      // Guardar offline
-      console.log('Guardando registro offline');
-      
-      const offlineRecord: OfflineRecord = {
-        local_id: `offline_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-        employee_name: selectedEmployee.name,
-        type: type,
-        timestamp: timestamp,
-        latitude: coordinates?.lat,
-        longitude: coordinates?.lng,
-        address: currentLocation,
-        notes: 'Registro offline'
-      };
-
-      const updatedOfflineRecords = [...offlineRecords, offlineRecord];
-      setOfflineRecords(updatedOfflineRecords);
-      await saveToStorage('offlineRecords', updatedOfflineRecords);
-
+    
+    if (!employee.has_face_registered && useFacialRecognition) {
       Alert.alert(
-        'Registro Offline',
-        `${type.toUpperCase()} guardada localmente\n\n${selectedEmployee.name}\n${currentLocation}\n${now.toLocaleString('es-CL')}\n\nSe sincronizara automaticamente cuando vuelva la conexion.`,
-        [{ text: 'OK' }]
+        '📸 Registro Facial Pendiente',
+        `${employee.name} no tiene rostro registrado.\n\n¿Deseas registrarlo ahora para usar reconocimiento facial?`,
+        [
+          { text: 'Registrar Ahora', onPress: () => openCamera('register') },
+          { text: 'Más Tarde', style: 'cancel' }
+        ]
       );
-      return;
-    }
-
-    // Enviar online
-    try {
-      console.log('Enviando registro online');
-      
-      const response = await fetch(`${API_BASE_URL}/mark-attendance/`, {
-        method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          employee_name: selectedEmployee.name,
-          type: type,
-          timestamp: timestamp,
-          latitude: coordinates?.lat,
-          longitude: coordinates?.lng,
-          address: currentLocation
-        })
-      });
-
-      console.log('Respuesta del servidor:', response.status);
-      const data = await response.json();
-
-      if (data.success) {
-        console.log('Registro enviado exitosamente');
-        
-        const newRecord: AttendanceRecord = {
-          id: data.record.id,
-          employee_name: data.record.employee_name,
-          attendance_type: data.record.attendance_type,
-          timestamp: now.toLocaleString('es-CL'),
-          formatted_timestamp: data.record.formatted_timestamp,
-          location_lat: coordinates?.lat || 0,
-          location_lng: coordinates?.lng || 0,
-          address: currentLocation,
-          is_offline_sync: false
-        };
-
-        const updatedHistory = [newRecord, ...attendanceHistory].slice(0, 50);
-        setAttendanceHistory(updatedHistory);
-        await saveToStorage('attendanceHistory', updatedHistory);
-
-        Alert.alert(
-          'Registro Exitoso',
-          `${type.toUpperCase()} registrada correctamente\n\n${selectedEmployee.name}\n${currentLocation}\n${now.toLocaleString('es-CL')}`,
-          [{ text: 'Perfecto!' }]
-        );
-      } else {
-        throw new Error(data.message || 'Error en el servidor');
-      }
-    } catch (error) {
-      console.error('Error enviando registro:', error);
-      Alert.alert('Error', 'Error conectando con el servidor');
+    } else {
+      Alert.alert('✅ Empleado Seleccionado', `${employee.name} seleccionado correctamente`);
     }
   };
 
   const syncOfflineRecords = async () => {
     if (offlineRecords.length === 0 || !isOnline) return;
-
-    console.log(`Sincronizando ${offlineRecords.length} registros offline`);
+    
     setIsSyncing(true);
     
     try {
-      // PASO 1: Sincronizar empleados offline primero
-      await syncOfflineEmployees();
+      console.log(`Sincronizando ${offlineRecords.length} registros offline...`);
       
-      // PASO 2: Sincronizar registros de asistencia uno por uno
-      const successfulRecords: string[] = [];
-      const failedRecords: OfflineRecord[] = [];
+      const response = await fetch(`${API_BASE_URL}/sync-offline/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          offline_records: offlineRecords
+        })
+      });
       
-      for (const record of offlineRecords) {
-        try {
-          console.log(`Sincronizando: ${record.employee_name} - ${record.type}`);
-          
-          const response = await fetch(`${API_BASE_URL}/mark-attendance/`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              employee_name: record.employee_name,
-              type: record.type,
-              timestamp: record.timestamp,
-              latitude: record.latitude,
-              longitude: record.longitude,
-              address: record.address,
-              notes: record.notes + ' (sincronizado offline)',
-              is_offline_sync: true,
-              offline_timestamp: record.timestamp
-            })
-          });
-
-          const data = await response.json();
-          
-          if (data.success) {
-            console.log(`Sincronizado: ${record.employee_name} - ${data.record.attendance_type}`);
-            successfulRecords.push(record.local_id);
-            
-            // Agregar al historial local
-            const syncedRecord: AttendanceRecord = {
-              id: data.record.id,
-              employee_name: data.record.employee_name,
-              attendance_type: data.record.attendance_type,
-              timestamp: new Date(record.timestamp).toLocaleString('es-CL'),
-              formatted_timestamp: data.record.formatted_timestamp,
-              location_lat: record.latitude || 0,
-              location_lng: record.longitude || 0,
-              address: record.address,
-              is_offline_sync: true
-            };
-            
-            setAttendanceHistory(prev => [syncedRecord, ...prev].slice(0, 50));
-          } else {
-            console.log(`Error sincronizando ${record.local_id}: ${data.message}`);
-            failedRecords.push(record);
-          }
-        } catch (error) {
-          console.error(`Error de red sincronizando ${record.local_id}:`, error);
-          failedRecords.push(record);
-        }
-      }
-
-      // Solo eliminar los registros que se sincronizaron exitosamente
-      const remainingRecords = offlineRecords.filter(record => 
-        !successfulRecords.includes(record.local_id)
-      );
+      const data = await response.json();
       
-      setOfflineRecords(remainingRecords);
-      await saveToStorage('offlineRecords', remainingRecords);
-      
-      // Guardar historial actualizado
-      const currentHistory = await AsyncStorage.getItem('attendanceHistory');
-      const updatedHistory = currentHistory ? JSON.parse(currentHistory) : [];
-      await saveToStorage('attendanceHistory', updatedHistory);
-
-      if (successfulRecords.length > 0) {
+      if (data.success) {
+        // Limpiar registros sincronizados
+        setOfflineRecords([]);
+        await saveToStorage('offlineRecords', []);
+        
         Alert.alert(
-          'Sincronizacion Completa',
-          `Se sincronizaron ${successfulRecords.length} registros offline.${failedRecords.length > 0 ? `\n\n${failedRecords.length} registros no pudieron sincronizarse y se mantendran para intentar despues.` : ''}`,
-          [{ text: 'Excelente!' }]
-        );
-      } else if (failedRecords.length > 0) {
-        Alert.alert(
-          'Sincronizacion Parcial',
-          `No se pudieron sincronizar ${failedRecords.length} registros. Se mantendran para intentar despues.`,
+          '✅ Sincronización Completa',
+          `Se sincronizaron ${data.synced_count} de ${offlineRecords.length} registros.\n\n${data.error_count > 0 ? `${data.error_count} registros con errores.` : 'Todos los registros se sincronizaron correctamente.'}`,
           [{ text: 'OK' }]
         );
+        
+        // Recargar historial
+        await loadEmployees();
       }
-      
-      console.log(`Sincronizacion: ${successfulRecords.length} exitosos, ${failedRecords.length} fallidos`);
-      
     } catch (error) {
       console.error('Error sincronizando:', error);
-      Alert.alert('Error', 'Error durante la sincronizacion');
+      Alert.alert('Error', 'Error durante la sincronización');
     } finally {
       setIsSyncing(false);
     }
   };
 
-  const syncOfflineEmployees = async () => {
-    try {
-      const pendingEmployees = await AsyncStorage.getItem('pendingEmployees');
-      if (!pendingEmployees) return;
-      
-      const employeesToSync = JSON.parse(pendingEmployees);
-      console.log(`Sincronizando ${employeesToSync.length} empleados offline`);
-      
-      const syncedEmployeeIds: string[] = [];
-      
-      for (const empData of employeesToSync) {
-        try {
-          const response = await fetch(`${API_BASE_URL}/create-employee/`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              name: empData.name,
-              department: empData.department || 'General'
-            })
-          });
+  const toggleFacialRecognition = async () => {
+    const newValue = !useFacialRecognition;
+    setUseFacialRecognition(newValue);
+    await saveToStorage('useFacialRecognition', newValue);
+    
+    Alert.alert(
+      newValue ? '👤 Reconocimiento Facial' : '📝 Modo Manual',
+      newValue 
+        ? 'Ahora usarás tu rostro para marcar asistencia.\n\nMás rápido y seguro.'
+        : 'Marcarás asistencia seleccionando tu nombre.\n\nÚtil cuando hay problemas con la cámara.'
+    );
+  };
 
-          const data = await response.json();
-          
-          if (data.success) {
-            console.log(`Empleado sincronizado: ${data.employee.name} (${data.employee.employee_id})`);
-            
-            // Actualizar empleado en lista local con datos del servidor
-            setEmployees(prev => prev.map(emp => 
-              emp.id === empData.local_id ? {
-                id: data.employee.id,
-                name: data.employee.name,
-                employee_id: data.employee.employee_id,
-                department: data.employee.department,
-                position: data.employee.position
-              } : emp
-            ));
-            
-            syncedEmployeeIds.push(empData.local_id);
-          }
-        } catch (error) {
-          console.error(`Error sincronizando empleado ${empData.name}:`, error);
-        }
-      }
-      
-      // Limpiar empleados sincronizados exitosamente
-      const remainingEmployees = employeesToSync.filter((emp: PendingEmployee) => 
-        !syncedEmployeeIds.includes(emp.local_id)
-      );
-      
-      await AsyncStorage.setItem('pendingEmployees', JSON.stringify(remainingEmployees));
-      
-      if (syncedEmployeeIds.length > 0) {
-        console.log(`Sincronizados ${syncedEmployeeIds.length} empleados al servidor`);
-      }
-      
-    } catch (error) {
-      console.error('Error sincronizando empleados offline:', error);
-    }
+  const refreshLocation = async () => {
+    setCurrentLocation('Actualizando...');
+    await setupLocation();
   };
 
   const testConnection = async () => {
-    Alert.alert('Probando...', 'Verificando servidor');
-    
     try {
       const response = await fetch(`${API_BASE_URL}/health/`);
       const data = await response.json();
       
       Alert.alert(
-        'Conexion OK', 
-        `Servidor funcionando correctamente\n\nIP: ${API_BASE_URL}\nEstado: ${data.status}`
+        '✅ Conexión OK',
+        `Servidor funcionando correctamente\n\nEstado: ${data.status}\nModo: ${data.mode}\nEmpleados: ${data.employees_count}\nRegistros hoy: ${data.attendance_today}`,
+        [{ text: 'OK' }]
       );
     } catch (error) {
-      Alert.alert('Error de conexion', 'Verifica que el servidor Django este corriendo');
+      Alert.alert(
+        '❌ Error de Conexión',
+        'No se pudo conectar con el servidor.\n\nVerifica que el servidor Django esté corriendo.',
+        [{ text: 'OK' }]
+      );
     }
-  };
-
-  const clearAllOfflineData = async () => {
-    try {
-      await AsyncStorage.removeItem('offlineRecords');
-      await AsyncStorage.removeItem('pendingEmployees');
-      await AsyncStorage.removeItem('attendanceHistory');
-      setOfflineRecords([]);
-      setAttendanceHistory([]);
-      Alert.alert('Limpieza Completa', 'Todos los datos offline fueron eliminados. Ahora puedes empezar limpio.');
-      console.log('Datos offline limpiados');
-    } catch (error) {
-      console.error('Error limpiando datos offline:', error);
-    }
-  };
-
-  const refreshLocation = async () => {
-    setCurrentLocation('Actualizando ubicacion...');
-    await setupLocation();
   };
 
   return (
@@ -614,120 +680,157 @@ export default function App() {
       
       {/* Header */}
       <View style={[styles.header, !isOnline && styles.headerOffline]}>
-        <Text style={styles.title}>Sistema de Asistencia GPS</Text>
+        <Text style={styles.title}>Sistema de Asistencia</Text>
         <Text style={styles.subtitle}>
-          {isOnline ? 'Conectado' : 'Modo Offline'}
+          {useFacialRecognition ? '👤 Reconocimiento Facial' : '📝 Modo Manual'} • 
+          {isOnline ? ' 🟢 Online' : ' 🔴 Offline'}
           {offlineRecords.length > 0 && ` • ${offlineRecords.length} pendientes`}
-          {isSyncing && ' • Sincronizando...'}
         </Text>
       </View>
-
-      {/* Empleado seleccionado */}
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Empleado Actual</Text>
-        {selectedEmployee ? (
-          <View style={styles.selectedEmployee}>
-            <Text style={styles.employeeName}>{selectedEmployee.name}</Text>
-            <Text style={styles.employeeDetails}>
-              ID: {selectedEmployee.employee_id} • {selectedEmployee.department}
-            </Text>
+      
+      {/* Toggle Modo */}
+      <TouchableOpacity 
+        style={styles.toggleButton}
+        onPress={toggleFacialRecognition}
+      >
+        <Text style={styles.toggleText}>
+          {useFacialRecognition ? '🔄 Cambiar a Modo Manual' : '🔄 Activar Reconocimiento Facial'}
+        </Text>
+      </TouchableOpacity>
+      
+      {/* Empleado seleccionado (solo modo manual) */}
+      {!useFacialRecognition && (
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Empleado Actual</Text>
+          {selectedEmployee ? (
+            <View style={styles.selectedEmployee}>
+              <Text style={styles.employeeName}>{selectedEmployee.name}</Text>
+              <Text style={styles.employeeDetails}>
+                {selectedEmployee.employee_id} • {selectedEmployee.department}
+              </Text>
+              {selectedEmployee.has_face_registered && (
+                <Text style={styles.faceStatus}>✅ Rostro registrado</Text>
+              )}
+              <View style={styles.employeeActions}>
+                <TouchableOpacity 
+                  style={[styles.smallButton, { marginRight: 10 }]}
+                  onPress={() => setShowEmployeeModal(true)}
+                >
+                  <Text style={styles.smallButtonText}>Cambiar</Text>
+                </TouchableOpacity>
+                {!selectedEmployee.has_face_registered && (
+                  <TouchableOpacity 
+                    style={[styles.smallButton, styles.registerFaceButton]}
+                    onPress={() => openCamera('register')}
+                  >
+                    <Text style={styles.smallButtonText}>📸 Registrar Rostro</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            </View>
+          ) : (
             <TouchableOpacity 
               style={styles.button}
               onPress={() => setShowEmployeeModal(true)}
             >
-              <Text style={styles.buttonText}>Cambiar Empleado</Text>
+              <Text style={styles.buttonText}>Seleccionar Empleado</Text>
             </TouchableOpacity>
-          </View>
-        ) : (
-          <TouchableOpacity 
-            style={styles.button}
-            onPress={() => setShowEmployeeModal(true)}
-          >
-            <Text style={styles.buttonText}>Seleccionar Empleado</Text>
-          </TouchableOpacity>
-        )}
-      </View>
-
-      {/* Ubicacion */}
+          )}
+        </View>
+      )}
+      
+      {/* Ubicación */}
       <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Ubicacion Actual</Text>
+        <View style={styles.locationHeader}>
+          <Text style={styles.sectionTitle}>📍 Ubicación Actual</Text>
+          <TouchableOpacity onPress={refreshLocation}>
+            <Text style={styles.refreshButton}>🔄</Text>
+          </TouchableOpacity>
+        </View>
         <Text style={styles.locationText}>{currentLocation}</Text>
-        {coordinates && (
-          <Text style={styles.coordinatesText}>
-            {coordinates.lat.toFixed(6)}, {coordinates.lng.toFixed(6)}
-          </Text>
-        )}
-        <TouchableOpacity style={styles.smallButton} onPress={refreshLocation}>
-          <Text style={styles.smallButtonText}>Actualizar ubicacion</Text>
-        </TouchableOpacity>
       </View>
-
+      
       {/* Botones principales */}
       <View style={styles.buttonSection}>
         <View style={styles.buttonRow}>
           <TouchableOpacity 
             style={[styles.button, styles.entradaButton]}
-            onPress={() => markAttendance('entrada')}
-            disabled={isSyncing || !selectedEmployee}
+            onPress={() => {
+              if (useFacialRecognition) {
+                setPendingAttendanceType('entrada');
+                openCamera('verify');
+              } else {
+                markAttendanceManual('entrada');
+              }
+            }}
+            disabled={isSyncing || (!useFacialRecognition && !selectedEmployee)}
           >
-            <Text style={styles.buttonText}>ENTRADA</Text>
+            <Text style={styles.buttonText}>
+              {useFacialRecognition ? '📸 ENTRADA' : 'ENTRADA'}
+            </Text>
           </TouchableOpacity>
           
           <TouchableOpacity 
             style={[styles.button, styles.salidaButton]}
-            onPress={() => markAttendance('salida')}
-            disabled={isSyncing || !selectedEmployee}
+            onPress={() => {
+              if (useFacialRecognition) {
+                setPendingAttendanceType('salida');
+                openCamera('verify');
+              } else {
+                markAttendanceManual('salida');
+              }
+            }}
+            disabled={isSyncing || (!useFacialRecognition && !selectedEmployee)}
           >
-            <Text style={styles.buttonText}>SALIDA</Text>
+            <Text style={styles.buttonText}>
+              {useFacialRecognition ? '📸 SALIDA' : 'SALIDA'}
+            </Text>
           </TouchableOpacity>
         </View>
         
-        <TouchableOpacity 
-          style={[styles.button, styles.testButton]}
-          onPress={testConnection}
-        >
-          <Text style={styles.buttonText}>PROBAR CONEXION</Text>
-        </TouchableOpacity>
-
-        {/* Botones de sincronizacion y limpieza */}
-        {offlineRecords.length > 0 && isOnline && !isSyncing && (
+        {/* Botones secundarios */}
+        <View style={styles.secondaryButtons}>
+          {offlineRecords.length > 0 && isOnline && !isSyncing && (
+            <TouchableOpacity 
+              style={[styles.button, styles.syncButton]}
+              onPress={syncOfflineRecords}
+            >
+              <Text style={styles.buttonText}>
+                🔄 SINCRONIZAR ({offlineRecords.length})
+              </Text>
+            </TouchableOpacity>
+          )}
+          
           <TouchableOpacity 
-            style={[styles.button, styles.syncButton]}
-            onPress={syncOfflineRecords}
+            style={[styles.smallButton, styles.testButton]}
+            onPress={testConnection}
           >
-            <Text style={styles.buttonText}>SINCRONIZAR ({offlineRecords.length})</Text>
+            <Text style={styles.smallButtonText}>🔍 Test Conexión</Text>
           </TouchableOpacity>
-        )}
-
-        <TouchableOpacity 
-          style={[styles.button, styles.clearButton]}
-          onPress={clearAllOfflineData}
-        >
-          <Text style={styles.buttonText}>LIMPIAR DATOS OFFLINE</Text>
-        </TouchableOpacity>
-
-        {isSyncing && (
-          <View style={[styles.button, styles.syncingButton]}>
-            <Text style={styles.buttonText}>SINCRONIZANDO...</Text>
-          </View>
-        )}
+        </View>
       </View>
-
+      
       {/* Historial */}
       <View style={styles.historySection}>
-        <Text style={styles.historyTitle}>Historial de Asistencia</Text>
+        <Text style={styles.historyTitle}>📋 Historial de Asistencia</Text>
         <ScrollView style={styles.historyScroll}>
           {/* Registros offline pendientes */}
           {offlineRecords.map((record) => (
             <View key={record.local_id} style={[styles.historyItem, styles.offlineItem]}>
               <View style={styles.historyContent}>
-                <Text style={styles.offlineBadge}>PENDIENTE SYNC</Text>
-                <Text style={styles.historyName}>{record.employee_name}</Text>
-                <Text style={styles.historyType}>{record.type.toUpperCase()}</Text>
+                <Text style={styles.offlineBadge}>⏳ PENDIENTE</Text>
+                <Text style={styles.historyName}>
+                  {record.employee_name || 'Por verificar'}
+                </Text>
+                <Text style={[styles.historyType, 
+                  record.type === 'entrada' ? styles.entradaText : styles.salidaText
+                ]}>
+                  {record.type.toUpperCase()}
+                </Text>
                 <Text style={styles.historyTime}>
                   {new Date(record.timestamp).toLocaleString('es-CL')}
                 </Text>
-                <Text style={styles.locationInfo}>{record.address}</Text>
+                {record.photo && <Text style={styles.photoIndicator}>📸 Con foto</Text>}
               </View>
             </View>
           ))}
@@ -737,25 +840,126 @@ export default function App() {
             <View key={record.id} style={styles.historyItem}>
               <View style={styles.historyContent}>
                 <Text style={styles.historyName}>{record.employee_name}</Text>
-                <Text style={styles.historyType}>{record.attendance_type.toUpperCase()}</Text>
+                <View style={styles.historyRow}>
+                  <Text style={[
+                    styles.historyType,
+                    record.attendance_type === 'entrada' ? styles.entradaText : styles.salidaText
+                  ]}>
+                    {record.attendance_type.toUpperCase()}
+                  </Text>
+                  {record.face_confidence && record.face_confidence > 0 && (
+                    <Text style={styles.faceConfidence}>
+                      👤 {(record.face_confidence * 100).toFixed(0)}%
+                    </Text>
+                  )}
+                </View>
                 <Text style={styles.historyTime}>{record.timestamp}</Text>
                 <Text style={styles.locationInfo}>{record.address}</Text>
-                <Text style={styles.syncBadge}>
-                  {record.is_offline_sync ? 'Sincronizado' : 'En Linea'}
-                </Text>
               </View>
             </View>
           ))}
           
           {attendanceHistory.length === 0 && offlineRecords.length === 0 && (
-            <Text style={styles.noRecords}>
-              No hay registros aun{'\n\n'}
-              Selecciona un empleado y usa los botones ENTRADA o SALIDA para comenzar
-            </Text>
+            <View style={styles.emptyState}>
+              <Text style={styles.emptyStateIcon}>📋</Text>
+              <Text style={styles.emptyStateText}>
+                No hay registros aún
+              </Text>
+              <Text style={styles.emptyStateSubtext}>
+                {useFacialRecognition 
+                  ? 'Usa los botones de ENTRADA o SALIDA\npara tomar una foto y marcar asistencia'
+                  : 'Selecciona un empleado y usa\nENTRADA o SALIDA para marcar asistencia'}
+              </Text>
+            </View>
           )}
         </ScrollView>
       </View>
-
+      
+      {/* Modal Cámara */}
+      <Modal
+        animationType="slide"
+        transparent={false}
+        visible={showCamera}
+        onRequestClose={() => setShowCamera(false)}
+      >
+        <View style={styles.cameraContainer}>
+          {hasCameraPermission ? (
+            <>
+              <CameraView
+                ref={cameraRef}
+                style={styles.camera}
+                facing={facing}
+              >
+                <View style={styles.cameraOverlay}>
+                  {/* Guía visual para centrar rostro */}
+                  <View style={styles.faceGuide}>
+                    <View style={styles.faceGuideCorner} />
+                    <View style={[styles.faceGuideCorner, styles.topRight]} />
+                    <View style={[styles.faceGuideCorner, styles.bottomLeft]} />
+                    <View style={[styles.faceGuideCorner, styles.bottomRight]} />
+                  </View>
+                  
+                  <Text style={styles.cameraInstructions}>
+                    {cameraMode === 'register' 
+                      ? '📸 Centra tu rostro en el recuadro\nMira directamente a la cámara'
+                      : cameraMode === 'new-employee'
+                      ? '📸 Foto para nuevo empleado\nCentra el rostro en el recuadro'
+                      : '🔍 Verificando identidad\nMira a la cámara'}
+                  </Text>
+                </View>
+              </CameraView>
+              
+              <View style={styles.cameraControls}>
+                <TouchableOpacity
+                  style={styles.flipButton}
+                  onPress={() => setFacing(facing === 'back' ? 'front' : 'back')}
+                >
+                  <Text style={styles.flipText}>🔄</Text>
+                </TouchableOpacity>
+                
+                <TouchableOpacity
+                  style={[styles.captureButton, isProcessingPhoto && styles.captureButtonDisabled]}
+                  onPress={takePicture}
+                  disabled={isProcessingPhoto}
+                >
+                  {isProcessingPhoto ? (
+                    <ActivityIndicator size="large" color="white" />
+                  ) : (
+                    <View style={styles.captureButtonInner} />
+                  )}
+                </TouchableOpacity>
+                
+                <TouchableOpacity
+                  style={styles.cancelButton}
+                  onPress={() => {
+                    setShowCamera(false);
+                    setCameraMode(null);
+                  }}
+                >
+                  <Text style={styles.cancelText}>✖</Text>
+                </TouchableOpacity>
+              </View>
+            </>
+          ) : (
+            <View style={styles.noCameraPermission}>
+              <Text style={styles.noCameraIcon}>📷</Text>
+              <Text style={styles.noCameraText}>
+                No hay permisos de cámara
+              </Text>
+              <Text style={styles.noCameraSubtext}>
+                Ve a configuración y activa los permisos de cámara
+              </Text>
+              <TouchableOpacity
+                style={styles.button}
+                onPress={() => setShowCamera(false)}
+              >
+                <Text style={styles.buttonText}>Cerrar</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+        </View>
+      </Modal>
+      
       {/* Modal Seleccionar Empleado */}
       <Modal
         animationType="slide"
@@ -768,21 +972,34 @@ export default function App() {
             <Text style={styles.modalTitle}>Seleccionar Empleado</Text>
             
             <ScrollView style={styles.employeeList}>
-              {employees.map((employee) => (
-                <TouchableOpacity
-                  key={employee.id}
-                  style={[
-                    styles.employeeItem,
-                    selectedEmployee?.id === employee.id && styles.selectedEmployeeItem
-                  ]}
-                  onPress={() => selectEmployee(employee)}
-                >
-                  <Text style={styles.employeeItemName}>{employee.name}</Text>
-                  <Text style={styles.employeeItemDetails}>
-                    {employee.employee_id} • {employee.department}
-                  </Text>
-                </TouchableOpacity>
-              ))}
+              {employees.length > 0 ? (
+                employees.map((employee) => (
+                  <TouchableOpacity
+                    key={employee.id}
+                    style={[
+                      styles.employeeItem,
+                      selectedEmployee?.id === employee.id && styles.selectedEmployeeItem
+                    ]}
+                    onPress={() => selectEmployee(employee)}
+                  >
+                    <View style={styles.employeeItemContent}>
+                      <View>
+                        <Text style={styles.employeeItemName}>{employee.name}</Text>
+                        <Text style={styles.employeeItemDetails}>
+                          {employee.employee_id} • {employee.department}
+                        </Text>
+                      </View>
+                      {employee.has_face_registered && (
+                        <Text style={styles.faceRegisteredIcon}>👤✓</Text>
+                      )}
+                    </View>
+                  </TouchableOpacity>
+                ))
+              ) : (
+                <Text style={styles.noEmployees}>
+                  No hay empleados registrados
+                </Text>
+              )}
             </ScrollView>
             
             <View style={styles.modalButtons}>
@@ -793,11 +1010,11 @@ export default function App() {
                   setShowNewEmployeeModal(true);
                 }}
               >
-                <Text style={styles.modalButtonText}>Nuevo Empleado</Text>
+                <Text style={styles.modalButtonText}>➕ Nuevo Empleado</Text>
               </TouchableOpacity>
               
               <TouchableOpacity
-                style={[styles.modalButton, styles.cancelButton]}
+                style={[styles.modalButton, styles.cancelModalButton]}
                 onPress={() => setShowEmployeeModal(false)}
               >
                 <Text style={styles.modalButtonText}>Cancelar</Text>
@@ -806,7 +1023,7 @@ export default function App() {
           </View>
         </View>
       </Modal>
-
+      
       {/* Modal Nuevo Empleado */}
       <Modal
         animationType="slide"
@@ -821,6 +1038,7 @@ export default function App() {
             <TextInput
               style={styles.input}
               placeholder="Nombre completo *"
+              placeholderTextColor="#999"
               value={newEmployeeName}
               onChangeText={setNewEmployeeName}
             />
@@ -828,9 +1046,36 @@ export default function App() {
             <TextInput
               style={styles.input}
               placeholder="Departamento (opcional)"
+              placeholderTextColor="#999"
               value={newEmployeeDepartment}
               onChangeText={setNewEmployeeDepartment}
             />
+            
+            {newEmployeePhoto ? (
+              <View style={styles.photoPreview}>
+                <Image source={{ uri: newEmployeePhoto }} style={styles.previewImage} />
+                <TouchableOpacity
+                  style={styles.removePhotoButton}
+                  onPress={() => setNewEmployeePhoto(null)}
+                >
+                  <Text style={styles.removePhotoText}>❌ Quitar foto</Text>
+                </TouchableOpacity>
+              </View>
+            ) : (
+              <TouchableOpacity
+                style={styles.addPhotoButton}
+                onPress={() => {
+                  setShowNewEmployeeModal(false);
+                  openCamera('new-employee');
+                }}
+              >
+                <Text style={styles.addPhotoText}>📸 Agregar foto (recomendado)</Text>
+              </TouchableOpacity>
+            )}
+            
+            <Text style={styles.photoHint}>
+              La foto permite usar reconocimiento facial
+            </Text>
             
             <View style={styles.modalButtons}>
               <TouchableOpacity
@@ -846,11 +1091,12 @@ export default function App() {
               </TouchableOpacity>
               
               <TouchableOpacity
-                style={[styles.modalButton, styles.cancelButton]}
+                style={[styles.modalButton, styles.cancelModalButton]}
                 onPress={() => {
                   setShowNewEmployeeModal(false);
                   setNewEmployeeName('');
                   setNewEmployeeDepartment('');
+                  setNewEmployeePhoto(null);
                 }}
               >
                 <Text style={styles.modalButtonText}>Cancelar</Text>
@@ -866,206 +1112,426 @@ export default function App() {
 const styles = StyleSheet.create({
   container: { 
     flex: 1, 
-    backgroundColor: '#f5f5f5' 
+    backgroundColor: '#f0f2f5' 
   },
   
+  // Header
   header: { 
-    backgroundColor: '#2c3e50', 
+    backgroundColor: '#1a73e8', 
     padding: 20, 
     paddingTop: 50, 
     alignItems: 'center',
+    elevation: 4,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
   },
   headerOffline: { 
-    backgroundColor: '#e67e22' 
+    backgroundColor: '#ea4335' 
   },
   title: { 
-    fontSize: 18, 
+    fontSize: 22, 
     fontWeight: 'bold', 
     color: 'white',
     textAlign: 'center'
   },
   subtitle: { 
-    fontSize: 12, 
-    color: 'white', 
+    fontSize: 14, 
+    color: 'rgba(255,255,255,0.9)', 
     marginTop: 5,
     textAlign: 'center'
   },
   
+  // Toggle button
+  toggleButton: {
+    backgroundColor: 'white',
+    margin: 15,
+    padding: 14,
+    borderRadius: 10,
+    alignItems: 'center',
+    elevation: 2,
+    borderWidth: 1,
+    borderColor: '#e0e0e0'
+  },
+  toggleText: {
+    color: '#1a73e8',
+    fontSize: 15,
+    fontWeight: '600'
+  },
+  
+  // Sections
   section: { 
     backgroundColor: 'white', 
-    margin: 15, 
+    marginHorizontal: 15,
+    marginBottom: 10,
     padding: 15, 
-    borderRadius: 8, 
-    elevation: 2
+    borderRadius: 12, 
+    elevation: 2,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 3,
   },
   sectionTitle: {
-    fontSize: 14,
-    fontWeight: 'bold',
-    color: '#2c3e50',
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#202124',
     marginBottom: 10
   },
   selectedEmployee: {
     alignItems: 'center'
   },
   employeeName: { 
-    fontSize: 16, 
+    fontSize: 19, 
     fontWeight: 'bold', 
-    color: '#2c3e50',
-    marginBottom: 5
+    color: '#202124',
+    marginBottom: 5,
+    textAlign: 'center'
   },
   employeeDetails: {
-    fontSize: 12,
-    color: '#7f8c8d',
-    marginBottom: 10
+    fontSize: 14,
+    color: '#5f6368',
+    marginBottom: 5,
+    textAlign: 'center'
   },
-  locationText: { 
-    fontSize: 12, 
-    color: '#7f8c8d', 
-    textAlign: 'center',
-    marginBottom: 5
+  faceStatus: {
+    fontSize: 13,
+    color: '#34a853',
+    marginBottom: 10,
+    fontWeight: '500'
   },
-  coordinatesText: {
-    fontSize: 10,
-    color: '#95a5a6',
-    textAlign: 'center',
-    marginBottom: 10
+  employeeActions: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    marginTop: 10
   },
   
+  // Location
+  locationHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center'
+  },
+  locationText: { 
+    fontSize: 14, 
+    color: '#5f6368', 
+    textAlign: 'center',
+    lineHeight: 20
+  },
+  refreshButton: {
+    fontSize: 20,
+    padding: 5
+  },
+  
+  // Buttons
   buttonSection: { 
     paddingHorizontal: 15, 
-    gap: 10 
+    marginBottom: 10
   },
   buttonRow: { 
     flexDirection: 'row', 
-    gap: 10 
+    gap: 10,
+    marginBottom: 10
   },
   button: { 
-    padding: 12, 
-    borderRadius: 8, 
+    padding: 16, 
+    borderRadius: 10, 
     alignItems: 'center',
-    elevation: 2,
-    backgroundColor: '#3498db',
+    elevation: 3,
+    backgroundColor: '#1a73e8',
   },
   entradaButton: { 
-    backgroundColor: '#27ae60', 
+    backgroundColor: '#34a853', 
     flex: 1 
   },
   salidaButton: { 
-    backgroundColor: '#e74c3c', 
+    backgroundColor: '#ea4335', 
     flex: 1 
   },
-  testButton: { 
-    backgroundColor: '#17a2b8' 
-  },
   syncButton: { 
-    backgroundColor: '#f39c12' 
+    backgroundColor: '#fbbc04',
+    marginBottom: 10
   },
-  clearButton: { 
-    backgroundColor: '#e67e22' 
-  },
-  syncingButton: { 
-    backgroundColor: '#95a5a6' 
+  testButton: {
+    backgroundColor: '#5f6368',
   },
   buttonText: { 
     color: 'white', 
-    fontSize: 14, 
+    fontSize: 16, 
     fontWeight: 'bold' 
   },
   smallButton: {
-    backgroundColor: '#3498db',
-    padding: 8,
-    borderRadius: 6,
-    alignSelf: 'center'
+    backgroundColor: '#1a73e8',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 8,
+    elevation: 2
+  },
+  registerFaceButton: {
+    backgroundColor: '#34a853'
   },
   smallButtonText: {
     color: 'white',
-    fontSize: 10,
-    fontWeight: 'bold'
+    fontSize: 13,
+    fontWeight: '600'
+  },
+  secondaryButtons: {
+    gap: 10
   },
   
+  // History
   historySection: { 
     flex: 1, 
-    margin: 15, 
+    marginHorizontal: 15, 
+    marginBottom: 15,
     backgroundColor: 'white', 
-    borderRadius: 8, 
-    padding: 10,
+    borderRadius: 12, 
+    padding: 15,
     elevation: 2
   },
   historyTitle: { 
-    fontSize: 14, 
-    fontWeight: 'bold', 
-    color: '#2c3e50', 
-    marginBottom: 10 
+    fontSize: 16, 
+    fontWeight: '600', 
+    color: '#202124', 
+    marginBottom: 12 
   },
   historyScroll: { 
     flex: 1 
   },
   historyItem: { 
-    padding: 10, 
+    padding: 12, 
     borderBottomWidth: 1, 
-    borderBottomColor: '#ecf0f1'
+    borderBottomColor: '#f0f2f5',
+    marginBottom: 5,
+    borderRadius: 8
   },
   offlineItem: { 
-    backgroundColor: '#fff3cd', 
-    borderLeftWidth: 3, 
-    borderLeftColor: '#f39c12',
-    borderRadius: 4,
-    marginBottom: 8 
+    backgroundColor: '#fef7e0', 
+    borderLeftWidth: 4, 
+    borderLeftColor: '#fbbc04',
   },
   historyContent: { 
     flex: 1 
   },
   historyName: { 
-    fontSize: 14, 
-    fontWeight: 'bold', 
-    color: '#2c3e50',
-    marginBottom: 2
+    fontSize: 15, 
+    fontWeight: '600', 
+    color: '#202124',
+    marginBottom: 3
+  },
+  historyRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginBottom: 3
   },
   historyType: { 
-    fontSize: 12, 
+    fontSize: 13, 
     fontWeight: 'bold',
-    color: '#34495e',
-    marginBottom: 2
+  },
+  entradaText: {
+    color: '#34a853'
+  },
+  salidaText: {
+    color: '#ea4335'
+  },
+  faceConfidence: {
+    fontSize: 12,
+    color: '#1a73e8',
+    fontWeight: '600'
   },
   historyTime: { 
-    fontSize: 10, 
-    color: '#7f8c8d',
-    marginBottom: 3
+    fontSize: 12, 
+    color: '#5f6368',
+    marginBottom: 2
   },
   locationInfo: {
-    fontSize: 9,
-    color: '#27ae60',
-    marginBottom: 3
+    fontSize: 11,
+    color: '#80868b',
   },
   offlineBadge: { 
-    backgroundColor: '#f39c12', 
+    backgroundColor: '#fbbc04', 
     color: 'white', 
-    padding: 3, 
-    borderRadius: 3, 
-    fontSize: 8, 
+    paddingHorizontal: 8,
+    paddingVertical: 3, 
+    borderRadius: 12, 
+    fontSize: 11, 
     fontWeight: 'bold', 
     alignSelf: 'flex-start', 
-    marginBottom: 5 
+    marginBottom: 6 
   },
-  syncBadge: {
-    backgroundColor: '#27ae60',
+  photoIndicator: {
+    fontSize: 11,
+    color: '#1a73e8',
+    marginTop: 3,
+    fontWeight: '500'
+  },
+  
+  // Empty state
+  emptyState: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 50
+  },
+  emptyStateIcon: {
+    fontSize: 48,
+    marginBottom: 15
+  },
+  emptyStateText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#202124',
+    marginBottom: 8
+  },
+  emptyStateSubtext: {
+    fontSize: 14,
+    color: '#5f6368',
+    textAlign: 'center',
+    lineHeight: 20
+  },
+  
+  // Camera
+  cameraContainer: {
+    flex: 1,
+    backgroundColor: 'black'
+  },
+  camera: {
+    flex: 1
+  },
+  cameraOverlay: {
+    flex: 1,
+    backgroundColor: 'transparent',
+    justifyContent: 'center',
+    alignItems: 'center'
+  },
+  faceGuide: {
+    width: 280,
+    height: 280,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 30
+  },
+  faceGuideCorner: {
+    position: 'absolute',
+    width: 60,
+    height: 60,
+    borderColor: 'white',
+    borderTopWidth: 3,
+    borderLeftWidth: 3,
+    top: 0,
+    left: 0
+  },
+  topRight: {
+    borderLeftWidth: 0,
+    borderRightWidth: 3,
+    left: undefined,
+    right: 0
+  },
+  bottomLeft: {
+    borderTopWidth: 0,
+    borderBottomWidth: 3,
+    top: undefined,
+    bottom: 0
+  },
+  bottomRight: {
+    borderTopWidth: 0,
+    borderLeftWidth: 0,
+    borderBottomWidth: 3,
+    borderRightWidth: 3,
+    top: undefined,
+    left: undefined,
+    bottom: 0,
+    right: 0
+  },
+  cameraInstructions: {
     color: 'white',
-    padding: 2,
-    borderRadius: 2,
-    fontSize: 8,
-    fontWeight: 'bold',
-    alignSelf: 'flex-start'
+    fontSize: 16,
+    textAlign: 'center',
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    borderRadius: 20,
+    lineHeight: 22
   },
-  noRecords: { 
-    textAlign: 'center', 
-    color: '#7f8c8d', 
-    fontStyle: 'italic', 
-    marginTop: 30,
-    lineHeight: 16,
-    fontSize: 12
+  cameraControls: {
+    position: 'absolute',
+    bottom: 40,
+    left: 0,
+    right: 0,
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    alignItems: 'center',
+    paddingHorizontal: 40
   },
-
-  // Estilos del modal
+  captureButton: {
+    width: 75,
+    height: 75,
+    borderRadius: 37.5,
+    backgroundColor: 'white',
+    justifyContent: 'center',
+    alignItems: 'center',
+    elevation: 5
+  },
+  captureButtonDisabled: {
+    opacity: 0.5
+  },
+  captureButtonInner: {
+    width: 65,
+    height: 65,
+    borderRadius: 32.5,
+    backgroundColor: '#ea4335'
+  },
+  flipButton: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    backgroundColor: 'rgba(255,255,255,0.3)',
+    justifyContent: 'center',
+    alignItems: 'center'
+  },
+  flipText: {
+    fontSize: 24
+  },
+  cancelButton: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    backgroundColor: 'rgba(255,255,255,0.3)',
+    justifyContent: 'center',
+    alignItems: 'center'
+  },
+  cancelText: {
+    color: 'white',
+    fontSize: 24,
+    fontWeight: 'bold'
+  },
+  noCameraPermission: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 30
+  },
+  noCameraIcon: {
+    fontSize: 64,
+    marginBottom: 20
+  },
+  noCameraText: {
+    color: 'white',
+    fontSize: 20,
+    marginBottom: 10,
+    textAlign: 'center',
+    fontWeight: '600'
+  },
+  noCameraSubtext: {
+    color: 'rgba(255,255,255,0.8)',
+    fontSize: 15,
+    textAlign: 'center',
+    marginBottom: 30,
+    lineHeight: 22
+  },
+  
+  // Modals
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0, 0, 0, 0.5)',
@@ -1075,71 +1541,132 @@ const styles = StyleSheet.create({
   },
   modalContent: {
     backgroundColor: 'white',
-    borderRadius: 8,
+    borderRadius: 16,
     padding: 20,
     width: '100%',
-    maxHeight: '80%'
+    maxHeight: '80%',
+    elevation: 5
   },
   modalTitle: {
-    fontSize: 16,
+    fontSize: 20,
     fontWeight: 'bold',
-    color: '#2c3e50',
+    color: '#202124',
     textAlign: 'center',
-    marginBottom: 15
+    marginBottom: 20
   },
   employeeList: {
     maxHeight: 300,
     marginBottom: 15
   },
   employeeItem: {
-    padding: 12,
+    padding: 15,
     borderBottomWidth: 1,
-    borderBottomColor: '#ecf0f1',
-    borderRadius: 6,
-    marginBottom: 3
+    borderBottomColor: '#f0f2f5',
+    borderRadius: 10,
+    marginBottom: 5
   },
   selectedEmployeeItem: {
     backgroundColor: '#e8f5e8',
-    borderLeftWidth: 3,
-    borderLeftColor: '#27ae60'
+    borderLeftWidth: 4,
+    borderLeftColor: '#34a853'
+  },
+  employeeItemContent: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center'
   },
   employeeItemName: {
-    fontSize: 14,
-    fontWeight: 'bold',
-    color: '#2c3e50',
-    marginBottom: 2
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#202124',
+    marginBottom: 3
   },
   employeeItemDetails: {
-    fontSize: 10,
-    color: '#7f8c8d'
+    fontSize: 13,
+    color: '#5f6368'
+  },
+  faceRegisteredIcon: {
+    fontSize: 22,
+    color: '#34a853'
+  },
+  noEmployees: {
+    textAlign: 'center',
+    color: '#5f6368',
+    fontSize: 15,
+    paddingVertical: 30
   },
   modalButtons: {
     flexDirection: 'row',
-    gap: 10
+    gap: 10,
+    marginTop: 10
   },
   modalButton: {
     flex: 1,
-    padding: 12,
-    borderRadius: 6,
-    alignItems: 'center'
+    padding: 14,
+    borderRadius: 10,
+    alignItems: 'center',
+    elevation: 2
   },
   createButton: {
-    backgroundColor: '#27ae60'
+    backgroundColor: '#34a853'
   },
-  cancelButton: {
-    backgroundColor: '#e74c3c'
+  cancelModalButton: {
+    backgroundColor: '#5f6368'
   },
   modalButtonText: {
     color: 'white',
-    fontWeight: 'bold',
-    fontSize: 12
+    fontWeight: '600',
+    fontSize: 15
   },
   input: {
     borderWidth: 1,
-    borderColor: '#ddd',
-    borderRadius: 6,
+    borderColor: '#dadce0',
+    borderRadius: 10,
     padding: 12,
-    marginBottom: 10,
-    fontSize: 14
+    marginBottom: 12,
+    fontSize: 15,
+    color: '#202124'
   },
+  photoPreview: {
+    alignItems: 'center',
+    marginBottom: 15
+  },
+  previewImage: {
+    width: 120,
+    height: 120,
+    borderRadius: 60,
+    marginBottom: 10,
+    borderWidth: 3,
+    borderColor: '#34a853'
+  },
+  removePhotoButton: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    backgroundColor: '#ea4335',
+    borderRadius: 8
+  },
+  removePhotoText: {
+    color: 'white',
+    fontSize: 13,
+    fontWeight: '600'
+  },
+  addPhotoButton: {
+    padding: 14,
+    backgroundColor: '#1a73e8',
+    borderRadius: 10,
+    alignItems: 'center',
+    marginBottom: 8
+  },
+  addPhotoText: {
+    color: 'white',
+    fontSize: 15,
+    fontWeight: '600'
+  },
+  photoHint: {
+    fontSize: 12,
+    color: '#5f6368',
+    textAlign: 'center',
+    marginBottom: 15,
+    fontStyle: 'italic'
+  }
 });

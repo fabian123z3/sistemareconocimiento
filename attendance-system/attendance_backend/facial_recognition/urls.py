@@ -10,7 +10,11 @@ urlpatterns = [
     path('create-employee/', views.create_employee, name='create_employee'),
     path('delete-employee/<uuid:employee_id>/', views.delete_employee, name='delete_employee'),
     
-    # Marcado de asistencia
+    # Reconocimiento facial (procesado en servidor)
+    path('register-face/', views.register_employee_face, name='register_employee_face'),
+    path('verify-face/', views.verify_attendance_face, name='verify_attendance_face'),
+    
+    # Marcado de asistencia (compatible con ambos métodos)
     path('mark-attendance/', views.mark_attendance, name='mark_attendance'),
     
     # Sincronización offline
