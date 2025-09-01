@@ -12,64 +12,83 @@
         }
         
         body { 
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
-            background: #fff;
-            color: #000;
+            font-family: Arial, sans-serif;
+            background: #f5f5f5;
             padding: 20px;
+        }
+        
+        .container {
             max-width: 1200px;
             margin: 0 auto;
+            background: white;
+            padding: 20px;
+            border-radius: 5px;
         }
         
         h1 {
-            font-size: 24px;
             margin-bottom: 20px;
-            font-weight: normal;
+            color: #333;
         }
         
         .stats {
             display: flex;
             gap: 20px;
-            margin-bottom: 30px;
+            margin-bottom: 20px;
             flex-wrap: wrap;
         }
         
         .stat {
             flex: 1;
-            min-width: 150px;
+            min-width: 120px;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 5px;
+            text-align: center;
         }
         
         .stat-number {
-            font-size: 32px;
+            font-size: 24px;
             font-weight: bold;
+            color: #333;
         }
         
         .stat-label {
-            font-size: 14px;
+            font-size: 12px;
             color: #666;
+            margin-top: 5px;
         }
         
         .controls {
-            margin-bottom: 30px;
+            margin-bottom: 20px;
             display: flex;
             gap: 10px;
             flex-wrap: wrap;
         }
         
         select, button {
-            padding: 10px;
+            padding: 8px 12px;
             border: 1px solid #ddd;
-            background: #fff;
-            font-size: 14px;
+            border-radius: 3px;
+            background: white;
             cursor: pointer;
         }
         
         button {
-            background: #000;
-            color: #fff;
+            background: #007bff;
+            color: white;
+            border: none;
         }
         
         button:hover {
-            background: #333;
+            background: #0056b3;
+        }
+        
+        button.danger {
+            background: #dc3545;
+        }
+        
+        button.danger:hover {
+            background: #c82333;
         }
         
         table {
@@ -78,43 +97,44 @@
         }
         
         th {
-            text-align: left;
+            background: #f8f9fa;
             padding: 10px;
-            border-bottom: 2px solid #000;
+            text-align: left;
+            border-bottom: 2px solid #dee2e6;
             font-weight: normal;
-            font-size: 14px;
         }
         
         td {
             padding: 10px;
-            border-bottom: 1px solid #eee;
-            font-size: 14px;
+            border-bottom: 1px solid #dee2e6;
         }
         
         tr:hover {
-            background: #f9f9f9;
+            background: #f8f9fa;
         }
         
         .type-entrada {
             color: green;
+            font-weight: bold;
         }
         
         .type-salida {
             color: red;
+            font-weight: bold;
         }
         
-        .status {
-            position: fixed;
-            top: 20px;
-            right: 20px;
+        .delete-btn {
+            background: #dc3545;
+            color: white;
+            border: none;
             padding: 5px 10px;
-            background: #000;
-            color: #fff;
+            border-radius: 3px;
+            cursor: pointer;
             font-size: 12px;
         }
         
-        .status.offline {
-            background: red;
+        .delete-btn:hover {
+            background: #c82333;
         }
         
         .loading {
@@ -123,106 +143,163 @@
             color: #666;
         }
         
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.5);
+            z-index: 1000;
+        }
+        
+        .modal.active {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        
+        .modal-content {
+            background: white;
+            padding: 20px;
+            border-radius: 5px;
+            min-width: 300px;
+            text-align: center;
+        }
+        
+        .modal-buttons {
+            margin-top: 20px;
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+        }
+        
+        .badge {
+            display: inline-block;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 11px;
+        }
+        
+        .badge-facial {
+            background: #28a745;
+            color: white;
+        }
+        
+        .badge-manual {
+            background: #6c757d;
+            color: white;
+        }
+        
         @media (max-width: 768px) {
-            body { padding: 10px; }
+            .container { padding: 10px; }
             .stats { flex-direction: column; }
+            .controls { flex-direction: column; }
             th, td { padding: 5px; font-size: 12px; }
-            h1 { font-size: 20px; }
         }
     </style>
 </head>
 <body>
-    <div class="status" id="status">Online</div>
-    
-    <h1>Sistema de Asistencia GPS</h1>
-    
-    <div class="stats">
-        <div class="stat">
-            <div class="stat-number" id="totalToday">0</div>
-            <div class="stat-label">Registros Hoy</div>
+    <div class="container">
+        <h1>Panel de Asistencia</h1>
+        
+        <div class="stats">
+            <div class="stat">
+                <div class="stat-number" id="totalToday">0</div>
+                <div class="stat-label">Hoy</div>
+            </div>
+            <div class="stat">
+                <div class="stat-number" id="totalEmployees">0</div>
+                <div class="stat-label">Empleados</div>
+            </div>
+            <div class="stat">
+                <div class="stat-number" id="entriesCount">0</div>
+                <div class="stat-label">Entradas</div>
+            </div>
+            <div class="stat">
+                <div class="stat-number" id="exitsCount">0</div>
+                <div class="stat-label">Salidas</div>
+            </div>
+            <div class="stat">
+                <div class="stat-number" id="facialCount">0</div>
+                <div class="stat-label">Facial</div>
+            </div>
         </div>
-        <div class="stat">
-            <div class="stat-number" id="totalEmployees">0</div>
-            <div class="stat-label">Empleados</div>
+        
+        <div class="controls">
+            <select id="daysFilter">
+                <option value="1">Hoy</option>
+                <option value="7" selected>7 días</option>
+                <option value="30">30 días</option>
+            </select>
+            
+            <select id="employeeFilter">
+                <option value="">Todos</option>
+            </select>
+            
+            <select id="typeFilter">
+                <option value="">Todos</option>
+                <option value="entrada">Entradas</option>
+                <option value="salida">Salidas</option>
+            </select>
+            
+            <button onclick="loadData()">Actualizar</button>
+            <button class="danger" onclick="deleteSelected()" id="deleteBtn" style="display:none;">
+                Eliminar (<span id="selectedCount">0</span>)
+            </button>
         </div>
-        <div class="stat">
-            <div class="stat-number" id="entriesCount">0</div>
-            <div class="stat-label">Entradas</div>
+        
+        <div id="loading" class="loading" style="display: none;">
+            Cargando...
         </div>
-        <div class="stat">
-            <div class="stat-number" id="exitsCount">0</div>
-            <div class="stat-label">Salidas</div>
+        
+        <table id="dataTable">
+            <thead>
+                <tr>
+                    <th width="30">
+                        <input type="checkbox" id="selectAll" onchange="toggleAll()">
+                    </th>
+                    <th>Fecha/Hora</th>
+                    <th>Empleado</th>
+                    <th>Tipo</th>
+                    <th>Ubicación</th>
+                    <th>Método</th>
+                    <th>Acción</th>
+                </tr>
+            </thead>
+            <tbody id="tableBody">
+            </tbody>
+        </table>
+    </div>
+
+    <div id="deleteModal" class="modal">
+        <div class="modal-content">
+            <h3>Confirmar</h3>
+            <p id="deleteMessage">¿Eliminar registros?</p>
+            <div class="modal-buttons">
+                <button onclick="confirmDelete()">Eliminar</button>
+                <button onclick="cancelDelete()">Cancelar</button>
+            </div>
         </div>
     </div>
-    
-    <div class="controls">
-        <select id="daysFilter">
-            <option value="1">Hoy</option>
-            <option value="7" selected>7 días</option>
-            <option value="30">30 días</option>
-        </select>
-        
-        <select id="employeeFilter">
-            <option value="">Todos</option>
-        </select>
-        
-        <select id="typeFilter">
-            <option value="">Todos</option>
-            <option value="entrada">Entradas</option>
-            <option value="salida">Salidas</option>
-        </select>
-        
-        <button onclick="loadData()">Actualizar</button>
-        <button id="autoBtn" onclick="toggleAuto()">Auto: OFF</button>
-    </div>
-    
-    <div id="loading" class="loading" style="display: none;">
-        Cargando...
-    </div>
-    
-    <table id="dataTable">
-        <thead>
-            <tr>
-                <th>Fecha/Hora</th>
-                <th>Empleado</th>
-                <th>Tipo</th>
-                <th>Ubicación</th>
-                <th>Método</th>
-            </tr>
-        </thead>
-        <tbody id="tableBody">
-        </tbody>
-    </table>
 
     <script>
-        let autoRefresh = null;
-        let isOnline = true;
-
-        // Monitor conexión
-        window.addEventListener('online', () => {
-            isOnline = true;
-            document.getElementById('status').textContent = 'Online';
-            document.getElementById('status').className = 'status';
-        });
-        
-        window.addEventListener('offline', () => {
-            isOnline = false;
-            document.getElementById('status').textContent = 'Offline';
-            document.getElementById('status').className = 'status offline';
-        });
+        let selectedIds = new Set();
+        let pendingDelete = null;
 
         async function loadData() {
-            const loading = document.getElementById('loading');
-            const table = document.getElementById('dataTable');
-            loading.style.display = 'block';
-            table.style.display = 'none';
+            document.getElementById('loading').style.display = 'block';
+            document.getElementById('dataTable').style.display = 'none';
+            selectedIds.clear();
+            updateCount();
 
             try {
                 const days = document.getElementById('daysFilter').value;
                 const employeeId = document.getElementById('employeeFilter').value;
                 const type = document.getElementById('typeFilter').value;
                 
-                let url = `/api/attendance-records/?days=${days}&limit=100`;
+                let url = `/api/attendance-records/?days=${days}&limit=500`;
                 if (employeeId) url += `&employee_id=${employeeId}`;
 
                 const [recordsRes, employeesRes] = await Promise.all([
@@ -236,21 +313,19 @@
                 if (recordsData.success && employeesData.success) {
                     let records = recordsData.records;
                     
-                    // Filtrar por tipo si se especifica
                     if (type) {
                         records = records.filter(r => r.attendance_type === type);
                     }
 
                     updateStats(records, employeesData.employees);
-                    updateEmployeeSelect(employeesData.employees);
+                    updateEmployees(employeesData.employees);
                     renderTable(records);
                     
-                    loading.style.display = 'none';
-                    table.style.display = 'table';
+                    document.getElementById('loading').style.display = 'none';
+                    document.getElementById('dataTable').style.display = 'table';
                 }
             } catch (error) {
-                console.error('Error:', error);
-                loading.innerHTML = 'Error cargando datos';
+                document.getElementById('loading').innerHTML = 'Error';
             }
         }
 
@@ -259,14 +334,16 @@
             const todayRecords = records.filter(r => r.timestamp.startsWith(today));
             const entries = todayRecords.filter(r => r.attendance_type === 'entrada');
             const exits = todayRecords.filter(r => r.attendance_type === 'salida');
+            const facial = todayRecords.filter(r => r.face_confidence > 0);
             
             document.getElementById('totalToday').textContent = todayRecords.length;
             document.getElementById('totalEmployees').textContent = employees.length;
             document.getElementById('entriesCount').textContent = entries.length;
             document.getElementById('exitsCount').textContent = exits.length;
+            document.getElementById('facialCount').textContent = facial.length;
         }
 
-        function updateEmployeeSelect(employees) {
+        function updateEmployees(employees) {
             const select = document.getElementById('employeeFilter');
             const current = select.value;
             
@@ -285,7 +362,7 @@
             tbody.innerHTML = '';
 
             if (records.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;">No hay registros</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;">Sin registros</td></tr>';
                 return;
             }
 
@@ -294,39 +371,103 @@
                 const date = new Date(record.timestamp);
                 const typeClass = record.attendance_type === 'entrada' ? 'type-entrada' : 'type-salida';
                 
-                // Determinar método
                 let method = 'Manual';
-                if (record.face_confidence && record.face_confidence > 0) {
+                let badgeClass = 'badge-manual';
+                
+                if (record.face_confidence > 0) {
                     method = `Facial ${(record.face_confidence * 100).toFixed(0)}%`;
-                }
-                if (record.is_offline_sync) {
-                    method += ' (Sync)';
+                    badgeClass = 'badge-facial';
                 }
                 
                 row.innerHTML = `
+                    <td>
+                        <input type="checkbox" value="${record.id}" onchange="toggleSelect('${record.id}')">
+                    </td>
                     <td>${date.toLocaleString('es-CL')}</td>
-                    <td><strong>${record.employee_name}</strong></td>
+                    <td>${record.employee_name}</td>
                     <td class="${typeClass}">${record.attendance_type.toUpperCase()}</td>
-                    <td>${record.address || 'Sin ubicación'}</td>
-                    <td>${method}</td>
+                    <td>${record.address || '-'}</td>
+                    <td><span class="badge ${badgeClass}">${method}</span></td>
+                    <td>
+                        <button class="delete-btn" onclick="deleteOne('${record.id}')">
+                            Eliminar
+                        </button>
+                    </td>
                 `;
             });
         }
 
-        function toggleAuto() {
-            const btn = document.getElementById('autoBtn');
+        function toggleAll() {
+            const selectAll = document.getElementById('selectAll').checked;
+            const checkboxes = document.querySelectorAll('#tableBody input[type="checkbox"]');
             
-            if (autoRefresh) {
-                clearInterval(autoRefresh);
-                autoRefresh = null;
-                btn.textContent = 'Auto: OFF';
+            checkboxes.forEach(cb => {
+                cb.checked = selectAll;
+                if (selectAll) {
+                    selectedIds.add(cb.value);
+                } else {
+                    selectedIds.delete(cb.value);
+                }
+            });
+            
+            updateCount();
+        }
+
+        function toggleSelect(id) {
+            const checkbox = document.querySelector(`input[value="${id}"]`);
+            if (checkbox.checked) {
+                selectedIds.add(id);
             } else {
-                autoRefresh = setInterval(() => {
-                    if (isOnline) loadData();
-                }, 30000);
-                btn.textContent = 'Auto: ON';
-                loadData();
+                selectedIds.delete(id);
             }
+            updateCount();
+        }
+
+        function updateCount() {
+            const count = selectedIds.size;
+            document.getElementById('selectedCount').textContent = count;
+            document.getElementById('deleteBtn').style.display = count > 0 ? 'inline-block' : 'none';
+        }
+
+        function deleteOne(id) {
+            pendingDelete = [id];
+            document.getElementById('deleteMessage').textContent = '¿Eliminar este registro?';
+            document.getElementById('deleteModal').classList.add('active');
+        }
+
+        function deleteSelected() {
+            if (selectedIds.size === 0) return;
+            pendingDelete = Array.from(selectedIds);
+            document.getElementById('deleteMessage').textContent = `¿Eliminar ${selectedIds.size} registros?`;
+            document.getElementById('deleteModal').classList.add('active');
+        }
+
+        async function confirmDelete() {
+            if (!pendingDelete) return;
+            
+            document.getElementById('deleteModal').classList.remove('active');
+            
+            let success = 0;
+            for (const id of pendingDelete) {
+                try {
+                    const response = await fetch(`/api/delete-attendance/${id}/`, {
+                        method: 'DELETE'
+                    });
+                    if (response.ok) success++;
+                } catch (error) {
+                    console.error(error);
+                }
+            }
+            
+            alert(`${success} registro(s) eliminado(s)`);
+            pendingDelete = null;
+            selectedIds.clear();
+            loadData();
+        }
+
+        function cancelDelete() {
+            document.getElementById('deleteModal').classList.remove('active');
+            pendingDelete = null;
         }
 
         // Event listeners

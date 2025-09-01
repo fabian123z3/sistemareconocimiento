@@ -61,19 +61,19 @@ export default function App() {
   const [permission, requestPermission] = useCameraPermissions();
   const [showCamera, setShowCamera] = useState(false);
   const [facing, setFacing] = useState<'front' | 'back'>('front');
-  const [cameraMode, setCameraMode] = useState<'register' | 'verify' | null>(null);
+  const [cameraMode, setCameraMode] = useState<'register' | 'verify' | 'newEmployee' | null>(null);
   const [pendingType, setPendingType] = useState<'entrada' | 'salida'>('entrada');
   const cameraRef = useRef<CameraView>(null);
   
   // Estados para registro con múltiples fotos
   const [registrationPhotos, setRegistrationPhotos] = useState<string[]>([]);
   const [currentPhotoIndex, setCurrentPhotoIndex] = useState(0);
-  const [showRegistrationGuide, setShowRegistrationGuide] = useState(false);
   
   const [showEmployeeModal, setShowEmployeeModal] = useState(false);
   const [showNewEmployeeModal, setShowNewEmployeeModal] = useState(false);
   const [newEmployeeName, setNewEmployeeName] = useState('');
   const [newEmployeePhotos, setNewEmployeePhotos] = useState<string[]>([]);
+  const [creatingEmployee, setCreatingEmployee] = useState(false);
 
   // Guías para las 5 fotos
   const photoGuides = [
@@ -209,31 +209,61 @@ export default function App() {
       
       if (cameraMode === 'register') {
         // Agregar foto a la colección de registro
-        const newPhotos = [...registrationPhotos, photoData];
-        setRegistrationPhotos(newPhotos);
+        const currentPhotos = [...registrationPhotos, photoData];
+        setRegistrationPhotos(currentPhotos);
         
-        if (newPhotos.length < PHOTOS_REQUIRED) {
+        console.log(`Foto capturada: ${currentPhotos.length}/${PHOTOS_REQUIRED}`);
+        
+        if (currentPhotos.length < PHOTOS_REQUIRED) {
           // Necesitamos más fotos
-          setCurrentPhotoIndex(newPhotos.length);
+          setCurrentPhotoIndex(currentPhotos.length);
           Alert.alert(
-            `Foto ${newPhotos.length}/${PHOTOS_REQUIRED}`,
-            `Bien! Ahora ${photoGuides[newPhotos.length]}`,
+            `Foto ${currentPhotos.length}/${PHOTOS_REQUIRED}`,
+            `Bien! Ahora ${photoGuides[currentPhotos.length] || 'una más'}`,
             [{ text: 'OK' }]
           );
+          setIsLoading(false); // Importante: quitar loading para seguir tomando fotos
         } else {
           // Tenemos todas las fotos, enviar registro
+          console.log('Enviando registro con', currentPhotos.length, 'fotos');
           setShowCamera(false);
-          await registerFaceWithMultiplePhotos(newPhotos);
+          setIsLoading(false);
+          await registerFaceWithMultiplePhotos(currentPhotos);
+        }
+      } else if (cameraMode === 'newEmployee') {
+        // Registro de nuevo empleado - CORREGIDO
+        const currentPhotos = [...newEmployeePhotos, photoData];
+        setNewEmployeePhotos(currentPhotos);
+        
+        console.log(`Foto empleado: ${currentPhotos.length}/${PHOTOS_REQUIRED}`);
+        
+        if (currentPhotos.length < PHOTOS_REQUIRED) {
+          Alert.alert(
+            `Foto ${currentPhotos.length}/${PHOTOS_REQUIRED}`,
+            `Bien! Ahora ${photoGuides[currentPhotos.length] || 'una más'}`,
+            [{ text: 'OK' }]
+          );
+          setIsLoading(false); // Importante: quitar loading para seguir tomando fotos
+        } else {
+          // Tenemos todas las fotos, crear empleado
+          console.log('Creando empleado con', currentPhotos.length, 'fotos');
+          setShowCamera(false);
+          setCameraMode(null);
+          setIsLoading(false);
+          
+          // IMPORTANTE: Pasar las fotos directamente sin depender del estado
+          await createEmployeeWithPhotosDirectly(currentPhotos, newEmployeeName.trim());
         }
       } else if (cameraMode === 'verify') {
         // Verificación normal con una sola foto
         setShowCamera(false);
+        setIsLoading(false);
         await verifyFace(photoData, pendingType);
       }
       
     } catch (error) {
+      console.error('Error capturando foto:', error);
       Alert.alert('Error', 'No se pudo capturar la foto');
-    } finally {
       setIsLoading(false);
     }
   };
@@ -257,7 +287,7 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           employee_id: selectedEmployee.id,
-          photos: photos  // Enviamos las 5 fotos
+          photos: photos
         })
       });
       
@@ -273,7 +303,7 @@ export default function App() {
         
         Alert.alert(
           '✅ Registro Completo',
-          `Rostro registrado con ${data.photos_registered} fotos\nNivel de seguridad: ${data.security_level}`,
+          `Rostro registrado con ${data.details.photos_processed} fotos\nEncodings creados: ${data.details.encodings_created}`,
           [{ text: 'Excelente!' }]
         );
         
@@ -282,11 +312,6 @@ export default function App() {
         setCurrentPhotoIndex(0);
       } else {
         Alert.alert('Error', data.message || 'No se pudo registrar');
-        
-        // Si hay errores específicos con las fotos
-        if (data.errors && data.errors.length > 0) {
-          Alert.alert('Problemas con las fotos', data.errors.join('\n'));
-        }
       }
     } catch (error) {
       Alert.alert('Error', 'Error registrando rostro');
@@ -353,18 +378,22 @@ export default function App() {
         
         Alert.alert(
           '✅ Verificación Exitosa',
-          `${type.toUpperCase()} - ${data.employee.name}\nConfianza: ${data.confidence}\nSeguridad: ${data.security_check}`,
+          `${type.toUpperCase()} - ${data.employee.name}\nConfianza: ${data.confidence}\nTiempo: ${data.elapsed_time}`,
           [{ text: 'OK' }]
         );
       } else {
-        Alert.alert(
-          '❌ Verificación Fallida',
-          `${data.message}\n\nMás cercano: ${data.closest_match || 'N/A'}\nConfianza: ${data.closest_confidence || 'N/A'}\nRequerido: ${data.required_confidence || 'N/A'}`,
-          [{ text: 'OK' }]
-        );
-        
-        if (data.suggestions) {
-          Alert.alert('Sugerencias', data.suggestions.join('\n'));
+        if (data.timeout) {
+          Alert.alert(
+            '⏱️ Tiempo Excedido',
+            `La verificación tardó más de 10 segundos\n${data.suggestion}`,
+            [{ text: 'OK' }]
+          );
+        } else {
+          Alert.alert(
+            '❌ Verificación Fallida',
+            `${data.message}\n\nMás cercano: ${data.closest_match || 'N/A'}\nConfianza: ${data.closest_confidence || 'N/A'}`,
+            [{ text: 'OK' }]
+          );
         }
       }
     } catch (error) {
@@ -466,33 +495,74 @@ export default function App() {
             setCurrentPhotoIndex(0);
             setCameraMode('register');
             setShowCamera(true);
-            setShowRegistrationGuide(true);
           }
         }
       ]
     );
   };
 
-  const createEmployee = async () => {
+  const startNewEmployeeFlow = () => {
     if (!newEmployeeName.trim()) {
+      Alert.alert('Error', 'Ingresa un nombre primero');
+      return;
+    }
+    
+    // Limpiar fotos anteriores
+    setNewEmployeePhotos([]);
+    
+    Alert.alert(
+      '📸 Registro de Empleado',
+      `Se tomarán ${PHOTOS_REQUIRED} fotos del empleado para el registro facial obligatorio.\n\n¿Comenzar?`,
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        { 
+          text: 'Comenzar',
+          onPress: () => {
+            setNewEmployeePhotos([]); // Asegurar que está vacío
+            setCameraMode('newEmployee');
+            setShowCamera(true);
+            console.log('Iniciando captura de fotos para nuevo empleado');
+          }
+        }
+      ]
+    );
+  };
+
+  // Nueva función que recibe las fotos directamente
+  const createEmployeeWithPhotosDirectly = async (photos: string[], employeeName: string) => {
+    if (!employeeName.trim()) {
       Alert.alert('Error', 'Ingresa un nombre');
       return;
     }
     
+    console.log('createEmployeeWithPhotosDirectly - Fotos recibidas:', photos.length);
+    
+    if (photos.length < PHOTOS_REQUIRED) {
+      Alert.alert('Error', `Se requieren ${PHOTOS_REQUIRED} fotos, solo hay ${photos.length}`);
+      return;
+    }
+    
+    setCreatingEmployee(true);
     setIsLoading(true);
     
     try {
+      console.log('Enviando al servidor:', {
+        name: employeeName,
+        photos_count: photos.length
+      });
+      
       const response = await fetch(`${API_BASE_URL}/create-employee/`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          name: newEmployeeName.trim(),
+          name: employeeName,
           department: 'General',
-          photos: newEmployeePhotos  // Si hay fotos las enviamos
+          photos: photos  // Usar las fotos pasadas directamente
         })
       });
       
       const data = await response.json();
+      console.log('Respuesta del servidor:', data);
       
       if (data.success) {
         await loadEmployees();
@@ -500,33 +570,90 @@ export default function App() {
         setNewEmployeePhotos([]);
         setShowNewEmployeeModal(false);
         
-        if (!data.face_registered && data.photos_required) {
-          Alert.alert(
-            '✅ Empleado Creado',
-            `${data.employee.name} fue creado.\n\nNecesita registrar ${data.photos_required} fotos para usar reconocimiento facial.`,
-            [{ text: 'OK' }]
-          );
-        } else {
-          Alert.alert('✅', 'Empleado creado exitosamente');
-        }
+        Alert.alert(
+          '✅ Empleado Creado',
+          `${data.employee.name} fue creado con registro facial completo.\nID: ${data.employee.employee_id}`,
+          [{ text: 'OK' }]
+        );
       } else {
-        Alert.alert('Error', data.message);
+        Alert.alert('Error', data.message + '\n\nFotos enviadas: ' + photos.length);
       }
     } catch (error) {
+      console.error('Error creando empleado:', error);
       Alert.alert('Error', 'Error creando empleado');
     } finally {
       setIsLoading(false);
+      setCreatingEmployee(false);
+    }
+  };
+
+  const createEmployeeWithPhotos = async () => {
+    if (!newEmployeeName.trim()) {
+      Alert.alert('Error', 'Ingresa un nombre');
+      return;
+    }
+    
+    // Verificar que realmente tenemos las fotos
+    console.log('createEmployeeWithPhotos - Fotos disponibles:', newEmployeePhotos.length);
+    
+    if (newEmployeePhotos.length < PHOTOS_REQUIRED) {
+      Alert.alert('Error', `Se requieren ${PHOTOS_REQUIRED} fotos, solo hay ${newEmployeePhotos.length}`);
+      return;
+    }
+    
+    setCreatingEmployee(true);
+    setIsLoading(true);
+    
+    try {
+      console.log('Enviando al servidor:', {
+        name: newEmployeeName.trim(),
+        photos_count: newEmployeePhotos.length
+      });
+      
+      const response = await fetch(`${API_BASE_URL}/create-employee/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: newEmployeeName.trim(),
+          department: 'General',
+          photos: newEmployeePhotos
+        })
+      });
+      
+      const data = await response.json();
+      console.log('Respuesta del servidor:', data);
+      
+      if (data.success) {
+        await loadEmployees();
+        setNewEmployeeName('');
+        setNewEmployeePhotos([]);
+        setShowNewEmployeeModal(false);
+        
+        Alert.alert(
+          '✅ Empleado Creado',
+          `${data.employee.name} fue creado con registro facial completo.\nID: ${data.employee.employee_id}`,
+          [{ text: 'OK' }]
+        );
+      } else {
+        Alert.alert('Error', data.message + '\n\nFotos enviadas: ' + newEmployeePhotos.length);
+      }
+    } catch (error) {
+      console.error('Error creando empleado:', error);
+      Alert.alert('Error', 'Error creando empleado');
+    } finally {
+      setIsLoading(false);
+      setCreatingEmployee(false);
     }
   };
 
   const deleteEmployee = async (employee: Employee) => {
     Alert.alert(
-      'Eliminar',
-      `¿Eliminar a ${employee.name}?`,
+      'Eliminar Empleado',
+      `¿Eliminar completamente a ${employee.name}?\n\nEsto eliminará también todos sus registros de asistencia.`,
       [
         { text: 'No', style: 'cancel' },
         {
-          text: 'Sí',
+          text: 'Sí, eliminar todo',
           style: 'destructive',
           onPress: async () => {
             try {
@@ -542,7 +669,7 @@ export default function App() {
                   setSelectedEmployee(null);
                   await AsyncStorage.removeItem('selectedEmployee');
                 }
-                Alert.alert('✅', 'Eliminado');
+                Alert.alert('✅', 'Empleado eliminado completamente');
               }
             } catch (error) {
               Alert.alert('Error', 'No se pudo eliminar');
@@ -725,6 +852,7 @@ export default function App() {
                 onPress={() => {
                   setShowCamera(false);
                   setRegistrationPhotos([]);
+                  setNewEmployeePhotos([]);
                   setCurrentPhotoIndex(0);
                   setCameraMode(null);
                 }}
@@ -732,13 +860,13 @@ export default function App() {
                 <Text style={styles.closeCameraText}>✕</Text>
               </TouchableOpacity>
               
-              {cameraMode === 'register' && (
+              {(cameraMode === 'register' || cameraMode === 'newEmployee') && (
                 <View style={styles.registrationInfo}>
                   <Text style={styles.photoCounter}>
-                    Foto {registrationPhotos.length + 1} de {PHOTOS_REQUIRED}
+                    Foto {(cameraMode === 'register' ? registrationPhotos.length : newEmployeePhotos.length) + 1} de {PHOTOS_REQUIRED}
                   </Text>
                   <Text style={styles.photoGuide}>
-                    {photoGuides[registrationPhotos.length]}
+                    {photoGuides[cameraMode === 'register' ? registrationPhotos.length : newEmployeePhotos.length]}
                   </Text>
                 </View>
               )}
@@ -829,15 +957,21 @@ export default function App() {
               value={newEmployeeName}
               onChangeText={setNewEmployeeName}
               autoFocus
+              editable={!creatingEmployee}
             />
             
             <Text style={styles.photoHint}>
-              El registro facial se hará después de crear el empleado
+              Se requieren {PHOTOS_REQUIRED} fotos para el registro facial
+              {newEmployeePhotos.length > 0 && ` (${newEmployeePhotos.length}/${PHOTOS_REQUIRED})`}
             </Text>
             
             <View style={styles.modalButtons}>
-              <TouchableOpacity style={styles.modalButton} onPress={createEmployee}>
-                <Text>Crear</Text>
+              <TouchableOpacity 
+                style={styles.modalButton} 
+                onPress={startNewEmployeeFlow}
+                disabled={!newEmployeeName.trim() || creatingEmployee}
+              >
+                <Text>📸 Tomar Fotos</Text>
               </TouchableOpacity>
               
               <TouchableOpacity 
@@ -847,6 +981,7 @@ export default function App() {
                   setNewEmployeeName('');
                   setNewEmployeePhotos([]);
                 }}
+                disabled={creatingEmployee}
               >
                 <Text>Cancelar</Text>
               </TouchableOpacity>
