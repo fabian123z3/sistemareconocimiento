@@ -3,7 +3,7 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-SECRET_KEY = 'django-insecure-your-secret-key-here'
+SECRET_KEY = 'django-insecure-your-secret-key-change-in-production'
 DEBUG = True
 ALLOWED_HOSTS = ['*']
 
@@ -16,7 +16,7 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'rest_framework',
     'corsheaders',
-    'facial_recognition',
+    'facial_recognition',  # ← Cambiar 'attendance' por 'facial_recognition'
 ]
 
 MIDDLEWARE = [
@@ -35,7 +35,7 @@ ROOT_URLCONF = 'attendance_backend.urls'
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [BASE_DIR / 'templates'],  # Para el panel web
+        'DIRS': [BASE_DIR / 'templates'],
         'APP_DIRS': True,
         'OPTIONS': {
             'context_processors': [
@@ -87,12 +87,13 @@ MEDIA_ROOT = BASE_DIR / 'media'
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
-# CORS Settings
+# CORS Settings para permitir React Native
 CORS_ALLOWED_ORIGINS = [
-    "http://192.168.96.36:8081",
-    "http://192.168.96.36:19006", 
-    "http://127.0.0.1:19006",
     "http://localhost:19006",
+    "http://127.0.0.1:19006",
+    "http://192.168.1.100:19006",  # Cambia por tu IP local
+    "http://192.168.96.36:8081",   # Tu IP actual
+    "http://192.168.96.36:19006",  # Tu IP actual
 ]
 
 CORS_ALLOW_ALL_ORIGINS = True
@@ -102,4 +103,9 @@ REST_FRAMEWORK = {
     'DEFAULT_PERMISSION_CLASSES': [
         'rest_framework.permissions.AllowAny',
     ],
+    'DEFAULT_RENDERER_CLASSES': [
+        'rest_framework.renderers.JSONRenderer',
+    ],
+    'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
+    'PAGE_SIZE': 50
 }

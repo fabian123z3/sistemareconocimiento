@@ -1,0 +1,545 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Panel de Asistencia</title>
+    <style>
+        * { 
+            margin: 0; 
+            padding: 0; 
+            box-sizing: border-box; 
+        }
+        
+        body { 
+            font-family: Arial, sans-serif; 
+            background: #f5f5f5; 
+            color: #333; 
+        }
+        
+        .header { 
+            background: #2c3e50; 
+            color: white; 
+            padding: 20px; 
+            text-align: center; 
+        }
+        
+        .header h1 { 
+            font-size: 24px; 
+            margin-bottom: 5px; 
+        }
+        
+        .header p { 
+            font-size: 14px; 
+            opacity: 0.9; 
+        }
+        
+        .container { 
+            max-width: 1200px; 
+            margin: 0 auto; 
+            padding: 20px; 
+        }
+        
+        .stats { 
+            display: grid; 
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); 
+            gap: 15px; 
+            margin: 20px 0; 
+        }
+        
+        .stat-card { 
+            background: white; 
+            padding: 20px; 
+            border-radius: 8px; 
+            text-align: center; 
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1); 
+        }
+        
+        .stat-number { 
+            font-size: 28px; 
+            font-weight: bold; 
+            color: #2c3e50; 
+            display: block; 
+        }
+        
+        .stat-label { 
+            font-size: 12px; 
+            color: #666; 
+            margin-top: 5px; 
+        }
+        
+        .controls { 
+            background: white; 
+            padding: 20px; 
+            border-radius: 8px; 
+            margin: 20px 0; 
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1); 
+        }
+        
+        .controls h3 { 
+            margin-bottom: 15px; 
+            font-size: 16px; 
+        }
+        
+        .filter-row { 
+            display: flex; 
+            gap: 10px; 
+            flex-wrap: wrap; 
+        }
+        
+        .filter-group { 
+            display: flex; 
+            flex-direction: column; 
+            gap: 5px; 
+        }
+        
+        .filter-group label { 
+            font-size: 12px; 
+            font-weight: bold; 
+            color: #555; 
+        }
+        
+        .filter-group select { 
+            padding: 8px; 
+            border: 1px solid #ddd; 
+            border-radius: 4px; 
+        }
+        
+        .btn { 
+            padding: 8px 15px; 
+            border: none; 
+            border-radius: 4px; 
+            cursor: pointer; 
+            font-size: 12px; 
+            font-weight: bold; 
+        }
+        
+        .btn-primary { 
+            background: #3498db; 
+            color: white; 
+        }
+        
+        .btn-success { 
+            background: #27ae60; 
+            color: white; 
+        }
+        
+        .table-container { 
+            background: white; 
+            border-radius: 8px; 
+            overflow: hidden; 
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1); 
+            margin-top: 20px; 
+        }
+        
+        .table-header { 
+            background: #34495e; 
+            color: white; 
+            padding: 15px; 
+            font-size: 16px; 
+            font-weight: bold; 
+        }
+        
+        table { 
+            width: 100%; 
+            border-collapse: collapse; 
+        }
+        
+        th { 
+            background: #2c3e50; 
+            color: white; 
+            padding: 12px 8px; 
+            text-align: left; 
+            font-size: 12px; 
+        }
+        
+        td { 
+            padding: 10px 8px; 
+            border-bottom: 1px solid #eee; 
+            font-size: 12px; 
+        }
+        
+        tr:hover { 
+            background: #f8f9fa; 
+        }
+        
+        .status-entrada { 
+            color: #27ae60; 
+            font-weight: bold; 
+        }
+        
+        .status-salida { 
+            color: #e74c3c; 
+            font-weight: bold; 
+        }
+        
+        .sync-online { 
+            background: #27ae60; 
+            color: white; 
+            padding: 2px 6px; 
+            border-radius: 3px; 
+            font-size: 10px; 
+        }
+        
+        .sync-offline { 
+            background: #f39c12; 
+            color: white; 
+            padding: 2px 6px; 
+            border-radius: 3px; 
+            font-size: 10px; 
+        }
+        
+        .loading { 
+            text-align: center; 
+            padding: 40px; 
+            color: #666; 
+        }
+        
+        .loading-spinner {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #3498db;
+            border-radius: 50%;
+            width: 30px;
+            height: 30px;
+            animation: spin 1s linear infinite;
+            margin: 10px auto;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        .connection-status {
+            position: fixed;
+            top: 10px;
+            right: 10px;
+            padding: 8px 12px;
+            border-radius: 15px;
+            font-size: 12px;
+            font-weight: bold;
+        }
+        
+        .status-online { 
+            background: #27ae60; 
+            color: white; 
+        }
+        
+        .status-offline { 
+            background: #e74c3c; 
+            color: white; 
+        }
+        
+        @media (max-width: 768px) {
+            .container { padding: 10px; }
+            .stats { grid-template-columns: repeat(2, 1fr); }
+            .filter-row { flex-direction: column; }
+            table { font-size: 10px; }
+            th, td { padding: 6px 4px; }
+        }
+    </style>
+</head>
+<body>
+    <div class="connection-status" id="connectionStatus">
+        Conectado
+    </div>
+
+    <div class="header">
+        <h1>Panel de Asistencia GPS</h1>
+        <p>Sistema de control de asistencia con ubicacion</p>
+    </div>
+
+    <div class="container">
+        <div class="stats">
+            <div class="stat-card">
+                <span class="stat-number" id="totalRecords">-</span>
+                <div class="stat-label">Total Registros</div>
+            </div>
+            <div class="stat-card">
+                <span class="stat-number" id="totalEmployees">-</span>
+                <div class="stat-label">Empleados</div>
+            </div>
+            <div class="stat-card">
+                <span class="stat-number" id="todayRecords">-</span>
+                <div class="stat-label">Registros Hoy</div>
+            </div>
+            <div class="stat-card">
+                <span class="stat-number" id="entriesToday">-</span>
+                <div class="stat-label">Entradas Hoy</div>
+            </div>
+            <div class="stat-card">
+                <span class="stat-number" id="exitsToday">-</span>
+                <div class="stat-label">Salidas Hoy</div>
+            </div>
+            <div class="stat-card">
+                <span class="stat-number" id="lastUpdate">-</span>
+                <div class="stat-label">Ultima Actualizacion</div>
+            </div>
+        </div>
+
+        <div class="controls">
+            <h3>Filtros y Controles</h3>
+            <div class="filter-row">
+                <div class="filter-group">
+                    <label>Periodo:</label>
+                    <select id="daysFilter">
+                        <option value="1">Ultimo dia</option>
+                        <option value="3">Ultimos 3 dias</option>
+                        <option value="7" selected>Ultimos 7 dias</option>
+                        <option value="15">Ultimos 15 dias</option>
+                        <option value="30">Ultimo mes</option>
+                    </select>
+                </div>
+                
+                <div class="filter-group">
+                    <label>Empleado:</label>
+                    <select id="employeeFilter">
+                        <option value="">Todos los empleados</option>
+                    </select>
+                </div>
+                
+                <div class="filter-group">
+                    <label>Tipo:</label>
+                    <select id="typeFilter">
+                        <option value="">Todos los tipos</option>
+                        <option value="entrada">Solo Entradas</option>
+                        <option value="salida">Solo Salidas</option>
+                    </select>
+                </div>
+                
+                <div class="filter-group">
+                    <label>&nbsp;</label>
+                    <button class="btn btn-primary" onclick="loadData()">Actualizar</button>
+                </div>
+                
+                <div class="filter-group">
+                    <label>&nbsp;</label>
+                    <button class="btn btn-success" id="autoRefreshBtn" onclick="toggleAutoRefresh()">
+                        Auto-actualizar
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <div class="table-container">
+            <div class="table-header">
+                Registros de Asistencia
+            </div>
+            
+            <div id="loading" class="loading">
+                <div class="loading-spinner"></div>
+                <p>Cargando registros...</p>
+            </div>
+            
+            <div id="tableWrapper" style="display: none;">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Fecha y Hora</th>
+                            <th>Empleado</th>
+                            <th>Departamento</th>
+                            <th>Tipo</th>
+                            <th>Ubicacion</th>
+                            <th>Estado</th>
+                        </tr>
+                    </thead>
+                    <tbody id="recordsBody">
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let autoRefreshInterval = null;
+        let isOnline = navigator.onLine;
+
+        // Monitoreo de conexion
+        function updateConnectionStatus() {
+            const statusEl = document.getElementById('connectionStatus');
+            if (navigator.onLine) {
+                statusEl.textContent = 'Conectado';
+                statusEl.className = 'connection-status status-online';
+                isOnline = true;
+            } else {
+                statusEl.textContent = 'Desconectado';
+                statusEl.className = 'connection-status status-offline';
+                isOnline = false;
+            }
+        }
+
+        window.addEventListener('online', updateConnectionStatus);
+        window.addEventListener('offline', updateConnectionStatus);
+
+        async function loadData() {
+            const loading = document.getElementById('loading');
+            const tableWrapper = document.getElementById('tableWrapper');
+            
+            loading.style.display = 'block';
+            tableWrapper.style.display = 'none';
+
+            try {
+                // Obtener parametros de filtro
+                const days = document.getElementById('daysFilter').value;
+                const employeeId = document.getElementById('employeeFilter').value;
+                const typeFilter = document.getElementById('typeFilter').value;
+                
+                // Construir URL con filtros
+                let url = '/api/attendance-records/?days=' + days + '&limit=100';
+                if (employeeId) url += '&employee_id=' + employeeId;
+
+                // Cargar datos
+                const [recordsResponse, employeesResponse] = await Promise.all([
+                    fetch(url),
+                    fetch('/api/employees/')
+                ]);
+
+                const recordsData = await recordsResponse.json();
+                const employeesData = await employeesResponse.json();
+
+                if (recordsData.success && employeesData.success) {
+                    // Filtrar por tipo si se especifica
+                    let filteredRecords = recordsData.records;
+                    if (typeFilter) {
+                        filteredRecords = recordsData.records.filter(r => r.attendance_type === typeFilter);
+                    }
+
+                    updateStatistics(recordsData, employeesData, filteredRecords);
+                    updateEmployeeFilter(employeesData.employees);
+                    renderRecordsTable(filteredRecords);
+
+                    loading.style.display = 'none';
+                    tableWrapper.style.display = 'block';
+                } else {
+                    throw new Error(recordsData.message || employeesData.message || 'Error del servidor');
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                loading.innerHTML = `
+                    <div style="color: red;">
+                        <strong>Error:</strong> ${error.message}<br><br>
+                        <button class="btn btn-primary" onclick="loadData()">Reintentar</button>
+                    </div>
+                `;
+            }
+        }
+
+        function updateStatistics(recordsData, employeesData, filteredRecords) {
+            // Actualizar estadisticas
+            document.getElementById('totalRecords').textContent = recordsData.total;
+            document.getElementById('totalEmployees').textContent = employeesData.employees.length;
+
+            // Registros de hoy
+            const today = new Date().toISOString().split('T')[0];
+            const todayRecords = filteredRecords.filter(r => r.timestamp.startsWith(today));
+            document.getElementById('todayRecords').textContent = todayRecords.length;
+
+            // Entradas y salidas de hoy
+            const entriesToday = todayRecords.filter(r => r.attendance_type === 'entrada').length;
+            const exitsToday = todayRecords.filter(r => r.attendance_type === 'salida').length;
+            
+            document.getElementById('entriesToday').textContent = entriesToday;
+            document.getElementById('exitsToday').textContent = exitsToday;
+
+            // Ultima actualizacion
+            document.getElementById('lastUpdate').textContent = 
+                new Date().toLocaleTimeString('es-CL', { 
+                    hour: '2-digit', 
+                    minute: '2-digit'
+                });
+        }
+
+        function updateEmployeeFilter(employees) {
+            const employeeFilter = document.getElementById('employeeFilter');
+            const currentValue = employeeFilter.value;
+            
+            // Mantener opcion "Todos"
+            employeeFilter.innerHTML = '<option value="">Todos los empleados</option>';
+            
+            employees.forEach(emp => {
+                const option = document.createElement('option');
+                option.value = emp.id;
+                option.textContent = emp.name + ' (' + emp.employee_id + ')';
+                if (emp.id === currentValue) option.selected = true;
+                employeeFilter.appendChild(option);
+            });
+        }
+
+        function renderRecordsTable(records) {
+            const tbody = document.getElementById('recordsBody');
+            tbody.innerHTML = '';
+
+            if (records.length === 0) {
+                tbody.innerHTML = `
+                    <tr>
+                        <td colspan="6" style="text-align: center; padding: 40px; color: #666;">
+                            No hay registros disponibles
+                        </td>
+                    </tr>
+                `;
+                return;
+            }
+
+            records.forEach((record) => {
+                const row = tbody.insertRow();
+                
+                // Formatear fecha
+                const date = new Date(record.timestamp);
+                const formattedDate = date.toLocaleString('es-CL');
+                
+                // Tipo de registro
+                const typeClass = `status-${record.attendance_type}`;
+                
+                // Ubicacion
+                let locationDisplay = 'Sin ubicacion';
+                if (record.location_lat && record.location_lng) {
+                    locationDisplay = record.address || (record.location_lat.toFixed(6) + ', ' + record.location_lng.toFixed(6));
+                }
+                
+                row.innerHTML = `
+                    <td>${formattedDate}</td>
+                    <td><strong>${record.employee_name}</strong><br><small>${record.employee_id || 'N/A'}</small></td>
+                    <td>${record.employee_department || 'N/A'}</td>
+                    <td><span class="${typeClass}">${record.attendance_type.toUpperCase()}</span></td>
+                    <td style="font-size: 10px;">${locationDisplay}</td>
+                    <td>
+                        <span class="${record.is_offline_sync ? 'sync-offline' : 'sync-online'}">
+                            ${record.is_offline_sync ? 'Sincronizado' : 'En Linea'}
+                        </span>
+                    </td>
+                `;
+            });
+        }
+
+        function toggleAutoRefresh() {
+            const button = document.getElementById('autoRefreshBtn');
+            
+            if (autoRefreshInterval) {
+                clearInterval(autoRefreshInterval);
+                autoRefreshInterval = null;
+                button.textContent = 'Auto-actualizar';
+                button.className = 'btn btn-success';
+            } else {
+                autoRefreshInterval = setInterval(() => {
+                    if (isOnline) {
+                        loadData();
+                    }
+                }, 30000);
+                
+                button.textContent = 'Detener Auto';
+                button.className = 'btn btn-primary';
+                loadData();
+            }
+        }
+
+        // Event listeners
+        document.getElementById('daysFilter').addEventListener('change', loadData);
+        document.getElementById('employeeFilter').addEventListener('change', loadData);
+        document.getElementById('typeFilter').addEventListener('change', loadData);
+
+        // Inicializar
+        updateConnectionStatus();
+        loadData();
+    </script>
+</body>
+</html>

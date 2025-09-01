@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "AttendanceApp",
-    "slug": "AttendanceApp",
+    "name": "Sistema Asistencia GPS",
+    "slug": "attendance-gps-system",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -10,23 +10,21 @@
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
-      "backgroundColor": "#ffffff"
+      "backgroundColor": "#667eea"
     },
     "ios": {
       "supportsTablet": true,
       "infoPlist": {
-        "NSCameraUsageDescription": "Esta aplicación necesita acceso a la cámara para el reconocimiento facial de asistencia",
-        "NSLocationWhenInUseUsageDescription": "Esta aplicación necesita acceso a la ubicación para registrar la asistencia"
+        "NSLocationWhenInUseUsageDescription": "Esta aplicación necesita acceso a la ubicación para registrar la asistencia con coordenadas GPS exactas"
       }
     },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#ffffff"
+        "backgroundColor": "#667eea"
       },
       "edgeToEdgeEnabled": true,
       "permissions": [
-        "android.permission.CAMERA",
         "android.permission.ACCESS_FINE_LOCATION",
         "android.permission.ACCESS_COARSE_LOCATION"
       ]
@@ -36,15 +34,9 @@
     },
     "plugins": [
       [
-        "expo-camera",
-        {
-          "cameraPermission": "Permite a $(PRODUCT_NAME) acceder a tu cámara para reconocimiento facial"
-        }
-      ],
-      [
         "expo-location",
         {
-          "locationAlwaysAndWhenInUsePermission": "Permite a $(PRODUCT_NAME) usar tu ubicación para registro de asistencia"
+          "locationAlwaysAndWhenInUsePermission": "Permite a $(PRODUCT_NAME) usar tu ubicación para registro de asistencia con coordenadas GPS exactas"
         }
       ]
     ]
