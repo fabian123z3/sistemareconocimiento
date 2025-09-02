@@ -11,7 +11,8 @@ import {
   ActivityIndicator,
   SafeAreaView,
   RefreshControl,
-  Platform
+  Platform,
+  PermissionsAndroid
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -119,9 +120,9 @@ export default function App() {
           if (newTime >= 0) {
             if (VIDEO_REGISTRATION_DURATION - newTime === nextInstructionTime) {
                 instructionIndex++;
-                setRecordingGuide(videoInstructions[instructionIndex].text);
                 if (instructionIndex < videoInstructions.length) {
-                    nextInstructionTime = videoInstructions[instructionIndex].time;
+                  setRecordingGuide(videoInstructions[instructionIndex].text);
+                  nextInstructionTime = videoInstructions[instructionIndex].time;
                 }
             }
           }
@@ -145,6 +146,29 @@ export default function App() {
     };
   }, [isRecording]);
 
+  // Función para solicitar permisos de audio en Android
+  const requestAudioPermission = async () => {
+    if (Platform.OS === 'android') {
+      try {
+        const granted = await PermissionsAndroid.request(
+          PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
+          {
+            title: 'Permiso de Audio',
+            message: 'Esta aplicación necesita acceso al micrófono para grabar videos de registro facial',
+            buttonNeutral: 'Preguntar después',
+            buttonNegative: 'Cancelar',
+            buttonPositive: 'OK',
+          }
+        );
+        
+        return granted === PermissionsAndroid.RESULTS.GRANTED;
+      } catch (err) {
+        console.warn(err);
+        return false;
+      }
+    }
+    return true; // En iOS se maneja automáticamente por el plugin
+  };
 
   const initializeApp = async () => {
     await loadStoredData();
@@ -306,14 +330,45 @@ export default function App() {
     }
   };
 
-  const startVideoRecording = async () => {
+ const startVideoRecording = async () => {
   if (!cameraRef.current) return;
+  
+  // Verificar permisos múltiples veces
+  let hasAudioPermission = false;
+  
+  try {
+    // Primer intento
+    hasAudioPermission = await requestAudioPermission();
+    
+    // Si falló, intentar una vez más después de un momento
+    if (!hasAudioPermission) {
+      await new Promise(resolve => setTimeout(resolve, 500));
+      hasAudioPermission = await requestAudioPermission();
+    }
+  } catch (error) {
+    console.log('Error requesting audio permission:', error);
+  }
+  
+  if (!hasAudioPermission) {
+    Alert.alert(
+      'Permiso de Micrófono Requerido',
+      'Para grabar video con instrucciones de voz:\n\n1. Ve a Configuración de tu dispositivo\n2. Aplicaciones → Expo Go\n3. Permisos → Micrófono → Permitir\n4. Vuelve a la app y reintenta\n\nO reinicia la aplicación después de otorgar el permiso.',
+      [
+        { text: 'Ir a Configuración', onPress: () => {
+          setShowCamera(false);
+          setCameraMode(null);
+        }},
+        { text: 'Reintentar', onPress: () => startVideoRecording() }
+      ]
+    );
+    return;
+  }
+  
   setIsRecording(true);
 
   try {
     const video = await cameraRef.current.recordAsync({
       maxDuration: VIDEO_REGISTRATION_DURATION,
-  // Esto es necesario si estás usando estabilización
     });
 
     if (!video) {
@@ -328,14 +383,24 @@ export default function App() {
       await createEmployeeWithVideoDirectly(video.uri, newEmployeeName.trim());
     }
   } catch (error) {
-    console.error('Error recording video:', error);
-    Alert.alert('❌ Error', 'No se pudo grabar el video. Intenta nuevamente.');
+  console.error('Error recording video:', error);
+  
+  const errorMessage = error instanceof Error ? error.message : String(error);
+  
+  if (errorMessage.includes('RECORD_AUDIO') || errorMessage.includes('Missing permissions')) {
+      Alert.alert(
+        'Error de Permisos',
+        'El permiso de micrófono no está disponible. Reinicia la aplicación después de otorgar permisos en Configuración.',
+        [{ text: 'OK' }]
+      );
+    } else {
+      Alert.alert('Error', 'No se pudo grabar el video. Intenta nuevamente.');
+    }
   } finally {
     setIsRecording(false);
     setShowCamera(false);
   }
 };
-
   const stopRecording = () => {
     if (cameraRef.current && isRecording) {
       cameraRef.current.stopRecording();
@@ -384,39 +449,38 @@ export default function App() {
   };
 
   const createEmployeeWithVideoDirectly = async (videoUri: string, employeeName: string) => {
-    setCreatingEmployee(true);
-    const formData = new FormData();
-    formData.append('name', employeeName);
-    formData.append('department', 'General');
-    formData.append('video', {
-      uri: videoUri,
-      name: `new_employee_video.mp4`,
-      type: 'video/mp4',
-    } as any);
+  setCreatingEmployee(true);
+  const formData = new FormData();
+  formData.append('name', employeeName);
+  formData.append('department', 'General');
+  formData.append('video', {
+    uri: videoUri,
+    name: `new_employee_video.mp4`,
+    type: 'video/mp4',
+  } as any);
 
-    try {
-      const response = await fetch(`${API_BASE_URL}/create-employee-with-video/`, {
-        method: 'POST',
-        body: formData,
-      });
+  try {
+    const response = await fetch(`${API_BASE_URL}/create-employee-with-video/`, {
+      method: 'POST',
+      body: formData,
+    });
 
-      const data = await response.json();
-      if (data.success) {
-        await loadEmployees();
-        setNewEmployeeName('');
-        setShowNewEmployeeModal(false);
-        Alert.alert('✅ ¡Creado!', `Empleado ${data.employee.name} creado con reconocimiento facial avanzado por video`);
-      } else {
-        Alert.alert('❌ Error', data.message || 'Error creando empleado con video');
-      }
-    } catch (error) {
-      Alert.alert('❌ Error', 'Error de conexión creando empleado');
-    } finally {
-      setCreatingEmployee(false);
-      setCameraMode(null);
+    const data = await response.json();
+    if (data.success) {
+      await loadEmployees();
+      setNewEmployeeName('');
+      setShowNewEmployeeModal(false);
+      Alert.alert('✅ ¡Creado!', `Empleado ${data.employee.name} creado con reconocimiento facial avanzado por video`);
+    } else {
+      Alert.alert('❌ Error', data.message || 'Error creando empleado con video');
     }
-  };
-
+  } catch (error) {  // ← Cambiar esta línea
+    Alert.alert('❌ Error', 'Error de conexión creando empleado');
+  } finally {
+    setCreatingEmployee(false);
+    setCameraMode(null);
+  }
+};
 
   const verifyFaceWithTimeout = async (photoData: string, type: 'entrada' | 'salida') => {
     const timestamp = new Date().toISOString();
@@ -513,8 +577,6 @@ export default function App() {
       }
     }
   };
-
-  // Se eliminó la función de registro por fotos
 
   const markManual = async (type: 'entrada' | 'salida') => {
     if (!selectedEmployee) {
@@ -1050,14 +1112,6 @@ export default function App() {
     </SafeAreaView>
   );
 }
-
-// Define el estilo base fuera del objeto StyleSheet.create
-const cornerBase = {
-  position: 'absolute',
-  width: 25,
-  height: 25,
-  borderColor: '#fff',
-};
 
 const styles = StyleSheet.create({
   container: {
