@@ -20,8 +20,8 @@ import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as ImageManipulator from 'expo-image-manipulator';
 
 const API_BASE_URL = 'http://192.168.96.36:8000/api';
-const PHOTOS_REQUIRED = 5;
-const VERIFICATION_TIMEOUT = 10;
+const PHOTOS_REQUIRED = 8; // Aumentado para mejor variabilidad
+const VERIFICATION_TIMEOUT = 5;
 
 interface Employee {
   id: string;
@@ -61,6 +61,8 @@ export default function App() {
   const [facing, setFacing] = useState<'front' | 'back'>('front');
   const [cameraMode, setCameraMode] = useState<'register' | 'verify' | 'newEmployee' | null>(null);
   const [pendingType, setPendingType] = useState<'entrada' | 'salida'>('entrada');
+  const [flashMode, setFlashMode] = useState<'off' | 'on' | 'auto'>('auto');
+  const [currentFlash, setCurrentFlash] = useState<'off' | 'on'>('off');
   const cameraRef = useRef<CameraView>(null);
   
   // Estados de registro
@@ -75,18 +77,39 @@ export default function App() {
   const [verificationInProgress, setVerificationInProgress] = useState(false);
   const [timeoutCounter, setTimeoutCounter] = useState(0);
 
-  // Guías para registro
+  // Guías para registro con variabilidad emocional y física
   const photoGuides = [
-    '📸 Foto 1: Frente directo',
-    '📸 Foto 2: Ligeramente izquierda', 
-    '📸 Foto 3: Ligeramente derecha',
-    '📸 Foto 4: Mirando hacia arriba',
-    '📸 Foto 5: Expresión neutral'
+    '📸 Foto 1: Frente directo - expresión neutral',
+    '📸 Foto 2: Ligeramente izquierda - serio',
+    '📸 Foto 3: Ligeramente derecha - leve sonrisa',
+    '📸 Foto 4: Mirando hacia arriba - relajado',
+    '📸 Foto 5: Expresión alegre - sonrisa amplia',
+    '📸 Foto 6: Con gesto pensativo - ceño fruncido',
+    '📸 Foto 7: Hablando o con boca abierta',
+    '📸 Foto 8: Con diferente iluminación'
   ];
 
   useEffect(() => {
     initializeApp();
   }, []);
+
+  // Efecto para controlar flash automático
+  useEffect(() => {
+    if (flashMode === 'auto') {
+      const updateFlash = () => {
+        const currentHour = new Date().getHours();
+        const shouldUseFlash = currentHour < 8 || currentHour > 18;
+        setCurrentFlash(shouldUseFlash ? 'on' : 'off');
+      };
+      
+      updateFlash();
+      const interval = setInterval(updateFlash, 60000); // Actualizar cada minuto
+      
+      return () => clearInterval(interval);
+    } else {
+      setCurrentFlash(flashMode === 'on' ? 'on' : 'off');
+    }
+  }, [flashMode]);
 
   const initializeApp = async () => {
     await loadStoredData();
@@ -189,13 +212,6 @@ export default function App() {
     setRefreshing(false);
   };
 
-  const detectLowLight = async (imageUri: string): Promise<boolean> => {
-    // Función simplificada para detectar poca luz
-    // En un entorno real, analizarías los píxeles de la imagen
-    const currentHour = new Date().getHours();
-    return currentHour < 7 || currentHour > 19; // Asume poca luz fuera de 7AM-7PM
-  };
-
   const takePicture = async () => {
     if (!cameraRef.current) return;
     
@@ -203,7 +219,7 @@ export default function App() {
       setIsLoading(true);
       
       const photo = await cameraRef.current.takePictureAsync({
-        quality: 0.8,
+        quality: 0.95, // Calidad máxima
         base64: true,
       });
       
@@ -211,14 +227,14 @@ export default function App() {
         throw new Error('No se pudo capturar la foto');
       }
       
-      // Manipular imagen para mejor calidad
+      // Procesamiento avanzado de imagen
       const manipulated = await ImageManipulator.manipulateAsync(
         photo.uri,
         [
-          { resize: { width: 800 } },
+          { resize: { width: 1200 } }, // Resolución alta para mejor análisis
         ],
         { 
-          compress: 0.8, 
+          compress: 0.95,
           format: ImageManipulator.SaveFormat.JPEG, 
           base64: true 
         }
@@ -275,7 +291,6 @@ export default function App() {
   const verifyFaceWithTimeout = async (photoData: string, type: 'entrada' | 'salida') => {
     const timestamp = new Date().toISOString();
     
-    // Si está offline, guardar localmente
     if (!isOnline) {
       const record = {
         local_id: `offline_${Date.now()}`,
@@ -297,16 +312,14 @@ export default function App() {
     setVerificationInProgress(true);
     setTimeoutCounter(0);
     
-    // Contador visual
     const timeoutInterval = setInterval(() => {
       setTimeoutCounter(prev => prev + 1);
     }, 1000);
 
-    // Timeout de 10 segundos
     const timeoutPromise = new Promise((_, reject) => {
       setTimeout(() => {
         reject(new Error('TIMEOUT_EXCEEDED'));
-      }, 10000);
+      }, 5000);
     });
 
     const fetchPromise = fetch(`${API_BASE_URL}/verify-face/`, {
@@ -363,7 +376,7 @@ export default function App() {
       if (error.message === 'TIMEOUT_EXCEEDED') {
         Alert.alert(
           '⏱️ Tiempo Excedido',
-          'La verificación tardó más de 10 segundos.\n\n💡 Consejos:\n• Mejora la iluminación\n• Acércate más a la cámara\n• Evita sombras en el rostro'
+          'La verificación tardó más de 5 segundos.\n\n💡 Consejos:\n• Mejora la iluminación\n• Acércate más a la cámara\n• Evita sombras en el rostro'
         );
       } else {
         Alert.alert('❌ Error', 'Error de conexión. Intenta nuevamente.');
@@ -399,7 +412,7 @@ export default function App() {
         ));
         setSelectedEmployee({ ...selectedEmployee, has_face_registered: true });
         
-        Alert.alert('✅ ¡Registrado!', `Rostro de ${selectedEmployee.name} registrado correctamente`);
+        Alert.alert('✅ ¡Registrado!', `Rostro de ${selectedEmployee.name} registrado con ${photos.length} fotos para máxima precisión`);
         setRegistrationPhotos([]);
       } else {
         Alert.alert('❌ Error', data.message || 'Error registrando rostro');
@@ -493,8 +506,8 @@ export default function App() {
     }
     
     Alert.alert(
-      '📸 Registro Facial',
-      `¿Tomar ${PHOTOS_REQUIRED} fotos para registrar el rostro de ${selectedEmployee.name}?`,
+      '📸 Registro Facial Avanzado',
+      `¿Tomar ${PHOTOS_REQUIRED} fotos con diferentes expresiones para registrar el rostro de ${selectedEmployee.name}?\n\nIncluye: sonrisas, gestos serios, diferentes ángulos e iluminación para máxima precisión.`,
       [
         { text: '❌ Cancelar', style: 'cancel' },
         { 
@@ -519,7 +532,7 @@ export default function App() {
     
     Alert.alert(
       '👤 Nuevo Empleado',
-      `¿Crear empleado "${newEmployeeName}" con ${PHOTOS_REQUIRED} fotos?`,
+      `¿Crear empleado "${newEmployeeName}" con ${PHOTOS_REQUIRED} fotos variadas?`,
       [
         { text: '❌ Cancelar', style: 'cancel' },
         { 
@@ -557,7 +570,7 @@ export default function App() {
         setNewEmployeePhotos([]);
         setShowNewEmployeeModal(false);
         
-        Alert.alert('✅ ¡Creado!', `Empleado ${data.employee.name} creado y registrado`);
+        Alert.alert('✅ ¡Creado!', `Empleado ${data.employee.name} creado con reconocimiento facial avanzado`);
       } else {
         Alert.alert('❌ Error', data.message || 'Error creando empleado');
       }
@@ -625,13 +638,39 @@ export default function App() {
     }
   };
 
+  const renderFlashButton = () => {
+    const flashIcons = {
+      'off': '🔦',
+      'on': '💡',
+      'auto': '⚡'
+    };
+    
+    const flashStatus = flashMode === 'auto' ? `AUTO (${currentFlash.toUpperCase()})` : flashMode.toUpperCase();
+    
+    return (
+      <TouchableOpacity
+        style={[styles.flashButton, currentFlash === 'on' && styles.flashButtonActive]}
+        onPress={() => {
+          const modes = ['auto', 'on', 'off'] as const;
+          const currentIndex = modes.indexOf(flashMode);
+          const nextMode = modes[(currentIndex + 1) % modes.length];
+          setFlashMode(nextMode);
+        }}
+      >
+        <Text style={styles.flashText}>
+          {flashIcons[flashMode]} {flashStatus}
+        </Text>
+      </TouchableOpacity>
+    );
+  };
+
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar style="auto" />
       
       {/* Header */}
       <View style={styles.header}>
-        <Text style={styles.title}>📱 Asistencia</Text>
+        <Text style={styles.title}>📱 Asistencia Pro</Text>
         <Text style={[styles.status, !isOnline && styles.offline]}>
           {isOnline ? '🟢 Online' : '🔴 Offline'}
           {verificationInProgress && ` ⏱️ ${timeoutCounter}s`}
@@ -654,7 +693,7 @@ export default function App() {
             {selectedEmployee ? selectedEmployee.name : 'Seleccionar empleado'}
           </Text>
           {selectedEmployee?.has_face_registered && (
-            <Text style={styles.registered}>✅ Rostro registrado</Text>
+            <Text style={styles.registered}>✅ Reconocimiento facial avanzado activo</Text>
           )}
         </TouchableOpacity>
 
@@ -692,7 +731,10 @@ export default function App() {
 
         {/* Botones de verificación facial */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>📸 Verificación Facial</Text>
+          <Text style={styles.sectionTitle}>🔍 Reconocimiento Facial Inteligente</Text>
+          <Text style={styles.sectionSubtitle}>
+            Detecta rostros con cualquier expresión, lentes, barba o cambios físicos
+          </Text>
           <View style={styles.buttonRow}>
             <TouchableOpacity 
               style={[styles.button, styles.facial]}
@@ -705,7 +747,7 @@ export default function App() {
             >
               <Text style={styles.buttonText}>
                 {verificationInProgress && pendingType === 'entrada' ? 
-                  `⏱️ ${timeoutCounter}s` : '📸 ENTRADA'}
+                  `⏱️ ${timeoutCounter}s` : '🔍 ENTRADA'}
               </Text>
             </TouchableOpacity>
             
@@ -720,7 +762,7 @@ export default function App() {
             >
               <Text style={styles.buttonText}>
                 {verificationInProgress && pendingType === 'salida' ? 
-                  `⏱️ ${timeoutCounter}s` : '📸 SALIDA'}
+                  `⏱️ ${timeoutCounter}s` : '🔍 SALIDA'}
               </Text>
             </TouchableOpacity>
           </View>
@@ -733,7 +775,10 @@ export default function App() {
               disabled={verificationInProgress}
             >
               <Text style={styles.registerText}>
-                📸 Registrar rostro de {selectedEmployee.name}
+                📸 Registrar rostro avanzado de {selectedEmployee.name}
+              </Text>
+              <Text style={styles.registerSubText}>
+                ({PHOTOS_REQUIRED} fotos con diferentes expresiones)
               </Text>
             </TouchableOpacity>
           )}
@@ -761,7 +806,7 @@ export default function App() {
               </Text>
               <Text style={styles.historyTime}>
                 {record.timestamp}
-                {record.face_confidence && record.face_confidence > 0 && ' 📸'}
+                {record.face_confidence && record.face_confidence > 0 && ` 🔍 ${(record.face_confidence * 100).toFixed(0)}%`}
               </Text>
             </View>
           ))}
@@ -775,549 +820,581 @@ export default function App() {
       {isLoading && (
         <View style={styles.loading}>
           <ActivityIndicator size="large" color="#007AFF" />
-          <Text style={styles.loadingText}>Procesando...</Text>
-        </View>
-      )}
+         <Text style={styles.loadingText}>Procesando...</Text>
+       </View>
+     )}
 
-      {/* Modal de cámara */}
-      <Modal visible={showCamera} animationType="slide">
-        <View style={styles.cameraContainer}>
-          <CameraView
-            ref={cameraRef}
-            style={styles.camera}
-            facing={facing}
-          >
-            <View style={styles.cameraOverlay}>
-              {/* Botón cerrar */}
-              <TouchableOpacity 
-                style={styles.closeCamera} 
-                onPress={() => {
-                  setShowCamera(false);
-                  setRegistrationPhotos([]);
-                  setNewEmployeePhotos([]);
-                  setCameraMode(null);
-                }}
-              >
-                <Text style={styles.closeCameraText}>✕</Text>
-              </TouchableOpacity>
-              
-              {/* Información del modo */}
-              {(cameraMode === 'register' || cameraMode === 'newEmployee') && (
-                <View style={styles.cameraInfo}>
-                  <Text style={styles.photoCounter}>
-                    📸 Foto {(cameraMode === 'register' ? registrationPhotos.length : newEmployeePhotos.length) + 1}/{PHOTOS_REQUIRED}
-                  </Text>
-                  <Text style={styles.photoGuide}>
-                    {photoGuides[cameraMode === 'register' ? registrationPhotos.length : newEmployeePhotos.length]}
-                  </Text>
-                </View>
-              )}
+     {/* Modal de cámara */}
+     <Modal visible={showCamera} animationType="slide">
+       <View style={styles.cameraContainer}>
+         <CameraView
+  ref={cameraRef}
+  style={styles.camera}
+  facing={facing}
+  enableTorch={currentFlash === 'on'}
+>
+           <View style={styles.cameraOverlay}>
+             {/* Botón cerrar */}
+             <TouchableOpacity 
+               style={styles.closeCamera} 
+               onPress={() => {
+                 setShowCamera(false);
+                 setRegistrationPhotos([]);
+                 setNewEmployeePhotos([]);
+                 setCameraMode(null);
+               }}
+             >
+               <Text style={styles.closeCameraText}>✕</Text>
+             </TouchableOpacity>
+             
+             {/* Flash control */}
+             {renderFlashButton()}
+             
+             {/* Información del modo */}
+             {(cameraMode === 'register' || cameraMode === 'newEmployee') && (
+               <View style={styles.cameraInfo}>
+                 <Text style={styles.photoCounter}>
+                   📸 Foto {(cameraMode === 'register' ? registrationPhotos.length : newEmployeePhotos.length) + 1}/{PHOTOS_REQUIRED}
+                 </Text>
+                 <Text style={styles.photoGuide}>
+                   {photoGuides[cameraMode === 'register' ? registrationPhotos.length : newEmployeePhotos.length]}
+                 </Text>
+               </View>
+             )}
 
-              {cameraMode === 'verify' && (
-                <View style={styles.cameraInfo}>
-                  <Text style={styles.verifyTitle}>
-                    🔍 Verificación Facial
-                  </Text>
-                  <Text style={styles.verifySubtitle}>
-                    Centra tu rostro en la cámara
-                  </Text>
-                </View>
-              )}
-              
-              {/* Controles de cámara */}
-              <View style={styles.cameraControls}>
-                <TouchableOpacity 
-                  style={styles.flipButton}
-                  onPress={() => setFacing(facing === 'back' ? 'front' : 'back')}
-                >
-                  <Text style={styles.controlText}>🔄</Text>
-                </TouchableOpacity>
-                
-                <TouchableOpacity 
-                  style={styles.captureButton} 
-                  onPress={takePicture}
-                  disabled={isLoading}
-                >
-                  <Text style={styles.captureText}>
-                    {isLoading ? '⏳' : 
-                    '📸'
-                  }
-                </Text>
-                </TouchableOpacity>
-                
-                <View style={styles.placeholder} />
-              </View>
-            </View>
-          </CameraView>
-        </View>
-      </Modal>
+             {cameraMode === 'verify' && (
+               <View style={styles.cameraInfo}>
+                 <Text style={styles.verifyTitle}>
+                   🔍 Reconocimiento Inteligente
+                 </Text>
+                 <Text style={styles.verifySubtitle}>
+                   Cualquier expresión • Con/sin lentes • Cambios físicos
+                 </Text>
+               </View>
+             )}
+             
+             {/* Controles de cámara */}
+             <View style={styles.cameraControls}>
+               <TouchableOpacity 
+                 style={styles.flipButton}
+                 onPress={() => setFacing(facing === 'back' ? 'front' : 'back')}
+               >
+                 <Text style={styles.controlText}>🔄</Text>
+               </TouchableOpacity>
+               
+               <TouchableOpacity 
+                 style={styles.captureButton} 
+                 onPress={takePicture}
+                 disabled={isLoading}
+               >
+                 <Text style={styles.captureText}>
+                   {isLoading ? '⏳' : '📸'}
+                 </Text>
+               </TouchableOpacity>
+               
+               <View style={styles.placeholder} />
+             </View>
+           </View>
+         </CameraView>
+       </View>
+     </Modal>
 
-      {/* Modal de selección de empleados */}
-      <Modal visible={showEmployeeModal} transparent animationType="fade">
-        <View style={styles.modalOverlay}>
-          <View style={styles.modal}>
-            <Text style={styles.modalTitle}>👥 Empleados</Text>
-            
-            <ScrollView style={styles.employeeList}>
-              {employees.map((emp) => (
-                <View key={emp.id} style={styles.employeeItem}>
-                  <TouchableOpacity
-                    style={styles.employeeInfo}
-                    onPress={async () => {
-                      setSelectedEmployee(emp);
-                      await saveToStorage('selectedEmployee', emp);
-                      setShowEmployeeModal(false);
-                    }}
-                  >
-                    <Text style={styles.employeeName}>
-                      {emp.name}
-                      {emp.has_face_registered && ' ✅'}
-                    </Text>
-                    <Text style={styles.employeeId}>{emp.employee_id}</Text>
-                  </TouchableOpacity>
-                  
-                  <TouchableOpacity onPress={() => deleteEmployee(emp)}>
-                    <Text style={styles.deleteText}>🗑️</Text>
-                  </TouchableOpacity>
-                </View>
-              ))}
-            </ScrollView>
-            
-            <View style={styles.modalButtons}>
-              <TouchableOpacity 
-                style={styles.modalButton}
-                onPress={() => {
-                  setShowEmployeeModal(false);
-                  setShowNewEmployeeModal(true);
-                }}
-              >
-                <Text style={styles.buttonText}>➕ Nuevo</Text>
-              </TouchableOpacity>
-              
-              <TouchableOpacity 
-                style={[styles.modalButton, styles.modalButtonSecondary]}
-                onPress={() => setShowEmployeeModal(false)}
-              >
-                <Text style={styles.buttonText}>✕ Cerrar</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
+     {/* Modal de selección de empleados */}
+     <Modal visible={showEmployeeModal} transparent animationType="fade">
+       <View style={styles.modalOverlay}>
+         <View style={styles.modal}>
+           <Text style={styles.modalTitle}>👥 Empleados</Text>
+           
+           <ScrollView style={styles.employeeList}>
+             {employees.map((emp) => (
+               <View key={emp.id} style={styles.employeeItem}>
+                 <TouchableOpacity
+                   style={styles.employeeInfo}
+                   onPress={async () => {
+                     setSelectedEmployee(emp);
+                     await saveToStorage('selectedEmployee', emp);
+                     setShowEmployeeModal(false);
+                   }}
+                 >
+                   <Text style={styles.employeeName}>
+                     {emp.name}
+                     {emp.has_face_registered && ' 🔍'}
+                   </Text>
+                   <Text style={styles.employeeId}>{emp.employee_id}</Text>
+                 </TouchableOpacity>
+                 
+                 <TouchableOpacity onPress={() => deleteEmployee(emp)}>
+                   <Text style={styles.deleteText}>🗑️</Text>
+                 </TouchableOpacity>
+               </View>
+             ))}
+           </ScrollView>
+           
+           <View style={styles.modalButtons}>
+             <TouchableOpacity 
+               style={styles.modalButton}
+               onPress={() => {
+                 setShowEmployeeModal(false);
+                 setShowNewEmployeeModal(true);
+               }}
+             >
+               <Text style={styles.buttonText}>➕ Nuevo</Text>
+             </TouchableOpacity>
+             
+             <TouchableOpacity 
+               style={[styles.modalButton, styles.modalButtonSecondary]}
+               onPress={() => setShowEmployeeModal(false)}
+             >
+               <Text style={styles.buttonText}>✕ Cerrar</Text>
+             </TouchableOpacity>
+           </View>
+         </View>
+       </View>
+     </Modal>
 
-      {/* Modal de nuevo empleado */}
-      <Modal visible={showNewEmployeeModal} transparent animationType="fade">
-        <View style={styles.modalOverlay}>
-          <View style={styles.modal}>
-            <Text style={styles.modalTitle}>➕ Nuevo Empleado</Text>
-            
-            <TextInput
-              style={styles.input}
-              placeholder="Nombre completo"
-              value={newEmployeeName}
-              onChangeText={setNewEmployeeName}
-              editable={!creatingEmployee}
-              placeholderTextColor="#999"
-            />
-            
-            <View style={styles.modalButtons}>
-              <TouchableOpacity 
-                style={[styles.modalButton, (!newEmployeeName.trim() || creatingEmployee) && styles.modalButtonDisabled]} 
-                onPress={startNewEmployeeFlow}
-                disabled={!newEmployeeName.trim() || creatingEmployee}
-              >
-                <Text style={styles.buttonText}>
-                  {creatingEmployee ? '⏳ Creando...' : '📸 Crear'}
-                </Text>
-              </TouchableOpacity>
-              
-              <TouchableOpacity 
-                style={[styles.modalButton, styles.modalButtonSecondary]}
-                onPress={() => {
-                  setShowNewEmployeeModal(false);
-                  setNewEmployeeName('');
-                  setNewEmployeePhotos([]);
-                }}
-                disabled={creatingEmployee}
-              >
-                <Text style={styles.buttonText}>✕ Cancelar</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
-    </SafeAreaView>
-  );
+     {/* Modal de nuevo empleado */}
+     <Modal visible={showNewEmployeeModal} transparent animationType="fade">
+       <View style={styles.modalOverlay}>
+         <View style={styles.modal}>
+           <Text style={styles.modalTitle}>➕ Nuevo Empleado</Text>
+           
+           <TextInput
+             style={styles.input}
+             placeholder="Nombre completo"
+             value={newEmployeeName}
+             onChangeText={setNewEmployeeName}
+             editable={!creatingEmployee}
+             placeholderTextColor="#999"
+           />
+           
+           <View style={styles.modalButtons}>
+             <TouchableOpacity 
+               style={[styles.modalButton, (!newEmployeeName.trim() || creatingEmployee) && styles.modalButtonDisabled]} 
+               onPress={startNewEmployeeFlow}
+               disabled={!newEmployeeName.trim() || creatingEmployee}
+             >
+               <Text style={styles.buttonText}>
+                 {creatingEmployee ? '⏳ Creando...' : '📸 Crear'}
+               </Text>
+             </TouchableOpacity>
+             
+             <TouchableOpacity 
+               style={[styles.modalButton, styles.modalButtonSecondary]}
+               onPress={() => {
+                 setShowNewEmployeeModal(false);
+                 setNewEmployeeName('');
+                 setNewEmployeePhotos([]);
+               }}
+               disabled={creatingEmployee}
+             >
+               <Text style={styles.buttonText}>✕ Cancelar</Text>
+             </TouchableOpacity>
+           </View>
+         </View>
+       </View>
+     </Modal>
+   </SafeAreaView>
+ );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#f5f6fa',
-  },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: 20,
-    backgroundColor: '#fff',
-    borderBottomWidth: 1,
-    borderBottomColor: '#e1e8ed',
-  },
-  title: {
-    fontSize: 22,
-    fontWeight: 'bold',
-    color: '#2c3e50',
-  },
-  status: {
-    fontSize: 14,
-    fontWeight: '500',
-    color: '#27ae60',
-  },
-  offline: {
-    color: '#e74c3c',
-  },
-  content: {
-    flex: 1,
-  },
-  card: {
-    backgroundColor: '#fff',
-    margin: 15,
-    padding: 20,
-    borderRadius: 12,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
-  },
-  label: {
-    fontSize: 14,
-    color: '#7f8c8d',
-    marginBottom: 5,
-    fontWeight: '500',
-  },
-  value: {
-    fontSize: 16,
-    color: '#2c3e50',
-    fontWeight: '500',
-  },
-  registered: {
-    fontSize: 12,
-    color: '#27ae60',
-    marginTop: 5,
-    fontWeight: '500',
-  },
-  section: {
-    margin: 15,
-  },
-  sectionTitle: {
-    fontSize: 16,
-    color: '#34495e',
-    marginBottom: 15,
-    fontWeight: '600',
-  },
-  buttonRow: {
-    flexDirection: 'row',
-    gap: 12,
-  },
-  button: {
-    flex: 1,
-    paddingVertical: 16,
-    paddingHorizontal: 20,
-    borderRadius: 12,
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
-  },
-  entrada: {
-    backgroundColor: '#27ae60',
-  },
-  salida: {
-    backgroundColor: '#e74c3c',
-  },
-  facial: {
-    backgroundColor: '#3498db',
-  },
-  buttonText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: 'bold',
-  },
-  registerButton: {
-    marginTop: 15,
-    backgroundColor: '#f8f9fa',
-    padding: 15,
-    borderRadius: 12,
-    alignItems: 'center',
-    borderWidth: 2,
-    borderColor: '#3498db',
-    borderStyle: 'dashed',
-  },
-  registerText: {
-    color: '#3498db',
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  syncButton: {
-    margin: 15,
-    backgroundColor: '#f39c12',
-    padding: 15,
-    borderRadius: 12,
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
-  },
-  syncText: {
-    color: '#fff',
-    fontSize: 14,
-    fontWeight: 'bold',
-  },
-  history: {
-    margin: 15,
-    backgroundColor: '#fff',
-    padding: 20,
-    borderRadius: 12,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
-  },
-  historyTitle: {
-    fontSize: 16,
-    color: '#34495e',
-    marginBottom: 15,
-    fontWeight: '600',
-  },
-  historyItem: {
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#ecf0f1',
-  },
-  historyText: {
-    fontSize: 14,
-    color: '#2c3e50',
-    fontWeight: '500',
-  },
-  historyTime: {
-    fontSize: 12,
-    color: '#7f8c8d',
-    marginTop: 4,
-  },
-  emptyText: {
-    color: '#bdc3c7',
-    fontSize: 14,
-    textAlign: 'center',
-    fontStyle: 'italic',
-  },
-  loading: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: 'rgba(255,255,255,0.9)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  loadingText: {
-    marginTop: 10,
-    fontSize: 16,
-    color: '#7f8c8d',
-  },
-  cameraContainer: {
-    flex: 1,
-    backgroundColor: '#000',
-  },
-  camera: {
-    flex: 1,
-  },
-  cameraOverlay: {
-    flex: 1,
-    backgroundColor: 'transparent',
-  },
-  closeCamera: {
-    position: 'absolute',
-    top: 50,
-    right: 20,
-    backgroundColor: 'rgba(0,0,0,0.7)',
-    width: 50,
-    height: 50,
-    borderRadius: 25,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  closeCameraText: {
-    color: '#fff',
-    fontSize: 24,
-    fontWeight: 'bold',
-  },
-  cameraInfo: {
-    position: 'absolute',
-    top: 120,
-    left: 0,
-    right: 0,
-    alignItems: 'center',
-  },
-  photoCounter: {
-    fontSize: 20,
-    color: '#fff',
-    backgroundColor: 'rgba(0,0,0,0.7)',
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-    borderRadius: 20,
-    fontWeight: 'bold',
-  },
-  photoGuide: {
-    fontSize: 16,
-    color: '#fff',
-    backgroundColor: 'rgba(0,0,0,0.7)',
-    paddingHorizontal: 15,
-    paddingVertical: 8,
-    borderRadius: 15,
-    marginTop: 10,
-  },
-  verifyTitle: {
-    fontSize: 24,
-    color: '#fff',
-    backgroundColor: 'rgba(0,0,0,0.7)',
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-    borderRadius: 20,
-    fontWeight: 'bold',
-  },
-  verifySubtitle: {
-    fontSize: 16,
-    color: '#fff',
-    backgroundColor: 'rgba(0,0,0,0.7)',
-    paddingHorizontal: 15,
-    paddingVertical: 8,
-    borderRadius: 15,
-    marginTop: 10,
-  },
-  cameraControls: {
-    position: 'absolute',
-    bottom: 50,
-    left: 0,
-    right: 0,
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-    alignItems: 'center',
-    paddingHorizontal: 40,
-  },
-  flipButton: {
-    backgroundColor: 'rgba(0,0,0,0.7)',
-    width: 60,
-    height: 60,
-    borderRadius: 30,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  captureButton: {
-    backgroundColor: '#3498db',
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderWidth: 4,
-    borderColor: '#fff',
-  },
-  captureText: {
-    fontSize: 30,
-  },
-  controlText: {
-    fontSize: 24,
-  },
-  placeholder: {
-    width: 60,
-    height: 60,
-  },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  modal: {
-    backgroundColor: '#fff',
-    borderRadius: 15,
-    padding: 25,
-    width: '90%',
-    maxHeight: '70%',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.25,
-    shadowRadius: 10,
-    elevation: 10,
-  },
-  modalTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    marginBottom: 20,
-    textAlign: 'center',
-    color: '#2c3e50',
-  },
-  employeeList: {
-    maxHeight: 300,
-  },
-  employeeItem: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: 15,
-    borderBottomWidth: 1,
-    borderBottomColor: '#ecf0f1',
-  },
-  employeeInfo: {
-    flex: 1,
-  },
-  employeeName: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#2c3e50',
-  },
-  employeeId: {
-    fontSize: 12,
-    color: '#7f8c8d',
-    marginTop: 2,
-  },
-  deleteText: {
-    fontSize: 18,
-    padding: 10,
-  },
-  input: {
-    borderWidth: 1,
-    borderColor: '#ddd',
-    borderRadius: 10,
-    padding: 15,
-    fontSize: 16,
-    marginBottom: 20,
-    backgroundColor: '#f8f9fa',
-  },
-  modalButtons: {
-    flexDirection: 'row',
-    gap: 12,
-    marginTop: 15,
-  },
-  modalButton: {
-    flex: 1,
-    padding: 15,
-    backgroundColor: '#3498db',
-    borderRadius: 10,
-    alignItems: 'center',
-  },
-  modalButtonSecondary: {
-    backgroundColor: '#95a5a6',
-  },
-  modalButtonDisabled: {
-    backgroundColor: '#bdc3c7',
-  },
+ container: {
+   flex: 1,
+   backgroundColor: '#f5f6fa',
+ },
+ header: {
+   flexDirection: 'row',
+   justifyContent: 'space-between',
+   alignItems: 'center',
+   padding: 20,
+   backgroundColor: '#fff',
+   borderBottomWidth: 1,
+   borderBottomColor: '#e1e8ed',
+ },
+ title: {
+   fontSize: 22,
+   fontWeight: 'bold',
+   color: '#2c3e50',
+ },
+ status: {
+   fontSize: 14,
+   fontWeight: '500',
+   color: '#27ae60',
+ },
+ offline: {
+   color: '#e74c3c',
+ },
+ content: {
+   flex: 1,
+ },
+ card: {
+   backgroundColor: '#fff',
+   margin: 15,
+   padding: 20,
+   borderRadius: 12,
+   shadowColor: '#000',
+   shadowOffset: { width: 0, height: 2 },
+   shadowOpacity: 0.1,
+   shadowRadius: 4,
+   elevation: 3,
+ },
+ label: {
+   fontSize: 14,
+   color: '#7f8c8d',
+   marginBottom: 5,
+   fontWeight: '500',
+ },
+ value: {
+   fontSize: 16,
+   color: '#2c3e50',
+   fontWeight: '500',
+ },
+ registered: {
+   fontSize: 12,
+   color: '#27ae60',
+   marginTop: 5,
+   fontWeight: '500',
+ },
+ section: {
+   margin: 15,
+ },
+ sectionTitle: {
+   fontSize: 16,
+   color: '#34495e',
+   marginBottom: 8,
+   fontWeight: '600',
+ },
+ sectionSubtitle: {
+   fontSize: 12,
+   color: '#7f8c8d',
+   marginBottom: 15,
+   fontStyle: 'italic',
+ },
+ buttonRow: {
+   flexDirection: 'row',
+   gap: 12,
+ },
+ button: {
+   flex: 1,
+   paddingVertical: 16,
+   paddingHorizontal: 20,
+   borderRadius: 12,
+   alignItems: 'center',
+   shadowColor: '#000',
+   shadowOffset: { width: 0, height: 2 },
+   shadowOpacity: 0.1,
+   shadowRadius: 4,
+   elevation: 3,
+ },
+ entrada: {
+   backgroundColor: '#27ae60',
+ },
+ salida: {
+   backgroundColor: '#e74c3c',
+ },
+ facial: {
+   backgroundColor: '#3498db',
+ },
+ buttonText: {
+   color: '#fff',
+   fontSize: 16,
+   fontWeight: 'bold',
+ },
+ registerButton: {
+   marginTop: 15,
+   backgroundColor: '#f8f9fa',
+   padding: 15,
+   borderRadius: 12,
+   alignItems: 'center',
+   borderWidth: 2,
+   borderColor: '#3498db',
+   borderStyle: 'dashed',
+ },
+ registerText: {
+   color: '#3498db',
+   fontSize: 14,
+   fontWeight: '600',
+ },
+ registerSubText: {
+   color: '#7f8c8d',
+   fontSize: 11,
+   marginTop: 3,
+ },
+ syncButton: {
+   margin: 15,
+   backgroundColor: '#f39c12',
+   padding: 15,
+   borderRadius: 12,
+   alignItems: 'center',
+   shadowColor: '#000',
+   shadowOffset: { width: 0, height: 2 },
+   shadowOpacity: 0.1,
+   shadowRadius: 4,
+   elevation: 3,
+ },
+ syncText: {
+   color: '#fff',
+   fontSize: 14,
+   fontWeight: 'bold',
+ },
+ history: {
+   margin: 15,
+   backgroundColor: '#fff',
+   padding: 20,
+   borderRadius: 12,
+   shadowColor: '#000',
+   shadowOffset: { width: 0, height: 2 },
+   shadowOpacity: 0.1,
+   shadowRadius: 4,
+   elevation: 3,
+ },
+ historyTitle: {
+   fontSize: 16,
+   color: '#34495e',
+   marginBottom: 15,
+   fontWeight: '600',
+ },
+ historyItem: {
+   paddingVertical: 12,
+   borderBottomWidth: 1,
+   borderBottomColor: '#ecf0f1',
+ },
+ historyText: {
+   fontSize: 14,
+   color: '#2c3e50',
+   fontWeight: '500',
+ },
+ historyTime: {
+   fontSize: 12,
+   color: '#7f8c8d',
+   marginTop: 4,
+ },
+ emptyText: {
+   color: '#bdc3c7',
+   fontSize: 14,
+   textAlign: 'center',
+   fontStyle: 'italic',
+ },
+ loading: {
+   position: 'absolute',
+   top: 0,
+   left: 0,
+   right: 0,
+   bottom: 0,
+   backgroundColor: 'rgba(255,255,255,0.9)',
+   justifyContent: 'center',
+   alignItems: 'center',
+ },
+ loadingText: {
+   marginTop: 10,
+   fontSize: 16,
+   color: '#7f8c8d',
+ },
+ cameraContainer: {
+   flex: 1,
+   backgroundColor: '#000',
+ },
+ camera: {
+   flex: 1,
+ },
+ cameraOverlay: {
+   flex: 1,
+   backgroundColor: 'transparent',
+ },
+ closeCamera: {
+   position: 'absolute',
+   top: 50,
+   right: 20,
+   backgroundColor: 'rgba(0,0,0,0.7)',
+   width: 50,
+   height: 50,
+   borderRadius: 25,
+   justifyContent: 'center',
+   alignItems: 'center',
+ },
+ closeCameraText: {
+   color: '#fff',
+   fontSize: 24,
+   fontWeight: 'bold',
+ },
+ flashButton: {
+   position: 'absolute',
+   top: 50,
+   left: 20,
+   backgroundColor: 'rgba(0,0,0,0.7)',
+   paddingHorizontal: 15,
+   paddingVertical: 10,
+   borderRadius: 20,
+ },
+ flashButtonActive: {
+   backgroundColor: 'rgba(255,215,0,0.8)',
+ },
+ flashText: {
+   color: '#fff',
+   fontSize: 12,
+   fontWeight: 'bold',
+ },
+ cameraInfo: {
+   position: 'absolute',
+   top: 120,
+   left: 0,
+   right: 0,
+   alignItems: 'center',
+ },
+ photoCounter: {
+   fontSize: 20,
+   color: '#fff',
+   backgroundColor: 'rgba(0,0,0,0.7)',
+   paddingHorizontal: 20,
+   paddingVertical: 10,
+   borderRadius: 20,
+   fontWeight: 'bold',
+ },
+ photoGuide: {
+   fontSize: 14,
+   color: '#fff',
+   backgroundColor: 'rgba(0,0,0,0.7)',
+   paddingHorizontal: 15,
+   paddingVertical: 8,
+   borderRadius: 15,
+   marginTop: 10,
+   textAlign: 'center',
+ },
+ verifyTitle: {
+   fontSize: 20,
+   color: '#fff',
+   backgroundColor: 'rgba(0,0,0,0.7)',
+   paddingHorizontal: 20,
+   paddingVertical: 10,
+   borderRadius: 20,
+   fontWeight: 'bold',
+ },
+ verifySubtitle: {
+   fontSize: 12,
+   color: '#fff',
+   backgroundColor: 'rgba(0,0,0,0.7)',
+   paddingHorizontal: 15,
+   paddingVertical: 8,
+   borderRadius: 15,
+   marginTop: 10,
+   textAlign: 'center',
+ },
+ cameraControls: {
+   position: 'absolute',
+   bottom: 50,
+   left: 0,
+   right: 0,
+   flexDirection: 'row',
+   justifyContent: 'space-around',
+   alignItems: 'center',
+   paddingHorizontal: 40,
+ },
+ flipButton: {
+   backgroundColor: 'rgba(0,0,0,0.7)',
+   width: 60,
+   height: 60,
+   borderRadius: 30,
+   justifyContent: 'center',
+   alignItems: 'center',
+ },
+ captureButton: {
+   backgroundColor: '#3498db',
+   width: 80,
+   height: 80,
+   borderRadius: 40,
+   justifyContent: 'center',
+   alignItems: 'center',
+   borderWidth: 4,
+   borderColor: '#fff',
+ },
+ captureText: {
+   fontSize: 30,
+ },
+ controlText: {
+   fontSize: 24,
+ },
+ placeholder: {
+   width: 60,
+   height: 60,
+ },
+ modalOverlay: {
+   flex: 1,
+   backgroundColor: 'rgba(0,0,0,0.5)',
+   justifyContent: 'center',
+   alignItems: 'center',
+ },
+ modal: {
+   backgroundColor: '#fff',
+   borderRadius: 15,
+   padding: 25,
+   width: '90%',
+   maxHeight: '70%',
+   shadowColor: '#000',
+   shadowOffset: { width: 0, height: 10 },
+   shadowOpacity: 0.25,
+   shadowRadius: 10,
+   elevation: 10,
+ },
+ modalTitle: {
+   fontSize: 20,
+   fontWeight: 'bold',
+   marginBottom: 20,
+   textAlign: 'center',
+   color: '#2c3e50',
+ },
+ employeeList: {
+   maxHeight: 300,
+ },
+ employeeItem: {
+   flexDirection: 'row',
+   justifyContent: 'space-between',
+   alignItems: 'center',
+   paddingVertical: 15,
+   borderBottomWidth: 1,
+   borderBottomColor: '#ecf0f1',
+ },
+ employeeInfo: {
+   flex: 1,
+ },
+ employeeName: {
+   fontSize: 16,
+   fontWeight: '600',
+   color: '#2c3e50',
+ },
+ employeeId: {
+   fontSize: 12,
+   color: '#7f8c8d',
+   marginTop: 2,
+ },
+ deleteText: {
+   fontSize: 18,
+   padding: 10,
+ },
+ input: {
+   borderWidth: 1,
+   borderColor: '#ddd',
+   borderRadius: 10,
+   padding: 15,
+   fontSize: 16,
+   marginBottom: 20,
+   backgroundColor: '#f8f9fa',
+ },
+ modalButtons: {
+   flexDirection: 'row',
+   gap: 12,
+   marginTop: 15,
+ },
+ modalButton: {
+   flex: 1,
+   padding: 15,
+   backgroundColor: '#3498db',
+   borderRadius: 10,
+   alignItems: 'center',
+ },
+ modalButtonSecondary: {
+   backgroundColor: '#95a5a6',
+ },
+ modalButtonDisabled: {
+   backgroundColor: '#bdc3c7',
+ },
 });

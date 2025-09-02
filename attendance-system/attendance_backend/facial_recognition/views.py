@@ -27,20 +27,21 @@ os.makedirs(FACE_IMAGES_DIR, exist_ok=True)
 
 # Configuración del sistema inteligente
 SMART_CONFIG = {
-    'min_photos': 5,
-    'base_tolerance': 0.40,
+    'min_photos': 8,  # Aumentado para más variabilidad
+    'base_tolerance': 0.30,  # Más permisivo para cambios físicos
     'adaptive_tolerance': True,
-    'min_confidence': 0.70,
-    'min_matches': 3,
+    'min_confidence': 0.65,  # Reducido para ser más tolerante
+    'min_matches': 2,  # Reducido
     'use_landmarks': True,
     'use_augmentation': True,
-    'max_tolerance': 0.45,
-    'verification_timeout': 10,
-    'strict_mode': True,
-    'require_full_face': True,
-    'min_face_size': 80,
+    'max_tolerance': 0.35,  # Más permisivo
+    'verification_timeout': 5,
+    'strict_mode': False,  # Cambiado a False para ser más tolerante
+    'require_full_face': False,  # Más permisivo con rostros parciales
+    'min_face_size': 60,  # Reducido
+    'expression_variance': True,  # Nueva opción
+    'lighting_adaptation': True,  # Nueva opción
 }
-
 @api_view(['GET'])
 def health_check(request):
     """Estado del sistema inteligente"""
