@@ -3,45 +3,57 @@ import cv2
 import numpy as np
 import json
 import base64
-from PIL import Image, ImageEnhance, ImageFilter, ImageOps
+from PIL import Image, ImageEnhance, ImageFilter, ImageOps, ImageDraw
 import io
+import time
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
+from scipy.spatial import distance
+from .models import Employee
 
 class ImprovedFaceRecognitionService:
     def __init__(self):
-        # Configuración más tolerante para cambios físicos
-        self.base_confidence = 0.60  # Reducido para ser más permisivo
-        self.glasses_tolerance = 0.50  # Tolerancia especial para lentes
-        self.lighting_tolerance = 0.55  # Tolerancia para poca luz
-    
+        self.base_confidence = 0.60
+        self.glasses_tolerance = 0.50
+        self.lighting_tolerance = 0.55
+        self.VIDEO_FRAME_RATE = 10 
+        self.SMART_CONFIG = {
+            'min_photos': 8,
+            'base_tolerance': 0.30,
+            'adaptive_tolerance': True,
+            'min_confidence': 0.65,
+            'min_matches': 2,
+            'use_landmarks': True,
+            'use_augmentation': True,
+            'max_tolerance': 0.35,
+            'verification_timeout': 5,
+            'strict_mode': False,
+            'require_full_face': False,
+            'min_face_size': 60,
+            'expression_variance': True,
+            'lighting_adaptation': True,
+        }
+
     def enhance_low_light_image(self, image):
-        """Mejorar imágenes con poca iluminación"""
-        # Convertir a array numpy
         img_array = np.array(image)
-        
-        # Mejoras para poca luz
         enhanced_versions = []
         
-        # 1. Ecualización de histograma
         img_yuv = cv2.cvtColor(img_array, cv2.COLOR_RGB2YUV)
         img_yuv[:,:,0] = cv2.equalizeHist(img_yuv[:,:,0])
         equalized = cv2.cvtColor(img_yuv, cv2.COLOR_YUV2RGB)
         enhanced_versions.append(Image.fromarray(equalized))
         
-        # 2. Corrección Gamma para oscuridad
         gamma = 1.5
         inv_gamma = 1.0 / gamma
         table = np.array([((i / 255.0) ** inv_gamma) * 255 for i in np.arange(0, 256)]).astype("uint8")
         gamma_corrected = cv2.LUT(img_array, table)
         enhanced_versions.append(Image.fromarray(gamma_corrected))
         
-        # 3. CLAHE (Contrast Limited Adaptive Histogram Equalization)
         lab = cv2.cvtColor(img_array, cv2.COLOR_RGB2LAB)
         clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8,8))
         lab[:,:,0] = clahe.apply(lab[:,:,0])
         clahe_enhanced = cv2.cvtColor(lab, cv2.COLOR_LAB2RGB)
         enhanced_versions.append(Image.fromarray(clahe_enhanced))
         
-        # 4. Brillo y contraste automático
         enhanced = ImageEnhance.Brightness(image).enhance(1.4)
         enhanced = ImageEnhance.Contrast(enhanced).enhance(1.3)
         enhanced_versions.append(enhanced)
@@ -49,31 +61,25 @@ class ImprovedFaceRecognitionService:
         return enhanced_versions
     
     def detect_brightness_level(self, image_array):
-        """Detectar el nivel de brillo de la imagen"""
         gray = cv2.cvtColor(image_array, cv2.COLOR_RGB2GRAY)
         return np.mean(gray)
     
     def create_glasses_variations(self, image):
-        """Crear variaciones para personas con/sin lentes"""
-        variations = [image]  # Original
+        variations = [image]
         
         try:
-            # Aumentar contraste en área de ojos
             enhanced = ImageEnhance.Contrast(image).enhance(1.5)
             variations.append(enhanced)
             
-            # Reducir reflejos (simular quitar lentes)
             img_array = np.array(image)
             hsv = cv2.cvtColor(img_array, cv2.COLOR_RGB2HSV)
             
-            # Reducir saturación en áreas brillantes (reflejos de lentes)
             bright_mask = hsv[:,:,2] > 200
             hsv[bright_mask, 1] = hsv[bright_mask, 1] * 0.7
             
             no_glare = cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB)
             variations.append(Image.fromarray(no_glare))
             
-            # Suavizar para simular sin lentes
             blurred = image.filter(ImageFilter.GaussianBlur(0.5))
             variations.append(blurred)
             
@@ -81,12 +87,10 @@ class ImprovedFaceRecognitionService:
             print(f"Error creando variaciones de lentes: {e}")
         
         return variations
-    
+
     def robust_face_detection(self, image_array):
-        """Detección de rostros más robusta"""
         face_locations = []
         
-        # Método 1: HOG estándar
         try:
             locations = face_recognition.face_locations(image_array, model="hog")
             if locations:
@@ -94,7 +98,6 @@ class ImprovedFaceRecognitionService:
         except:
             pass
         
-        # Método 2: CNN si no encuentra con HOG
         if not face_locations:
             try:
                 locations = face_recognition.face_locations(image_array, model="cnn")
@@ -103,7 +106,6 @@ class ImprovedFaceRecognitionService:
             except:
                 pass
         
-        # Método 3: Con imagen mejorada si no encuentra rostro
         if not face_locations:
             try:
                 enhanced = cv2.equalizeHist(cv2.cvtColor(image_array, cv2.COLOR_RGB2GRAY))
@@ -114,12 +116,10 @@ class ImprovedFaceRecognitionService:
             except:
                 pass
         
-        # Remover duplicados
         unique_faces = []
         for face in face_locations:
             is_duplicate = False
             for existing in unique_faces:
-                # Si las caras están muy cerca, es duplicado
                 if all(abs(face[i] - existing[i]) < 30 for i in range(4)):
                     is_duplicate = True
                     break
@@ -127,236 +127,580 @@ class ImprovedFaceRecognitionService:
                 unique_faces.append(face)
         
         return unique_faces
-    
-    def process_photo_with_auto_enhance(self, base64_image):
-        """Procesar foto con mejoras automáticas"""
-        try:
-            # Decodificar imagen
-            if ',' in base64_image:
-                image_data = base64.b64decode(base64_image.split(',')[1])
-            else:
-                image_data = base64.b64decode(base64_image)
-            
-            image = Image.open(io.BytesIO(image_data))
-            if image.mode != 'RGB':
-                image = image.convert('RGB')
-            
-            # Redimensionar si es muy grande
-            if image.width > 1024:
-                ratio = 1024 / image.width
-                new_height = int(image.height * ratio)
-                image = image.resize((1024, new_height), Image.Resampling.LANCZOS)
-            
-            image_array = np.array(image)
-            brightness = self.detect_brightness_level(image_array)
-            
-            print(f"🔍 Brillo detectado: {brightness:.1f}")
-            
-            # Generar versiones mejoradas según condiciones
-            all_versions = []
-            
-            # Siempre incluir original
-            all_versions.append(('original', image))
-            
-            # Si hay poca luz (< 80), aplicar mejoras
-            if brightness < 80:
-                print("💡 Aplicando mejoras para poca luz...")
-                enhanced_versions = self.enhance_low_light_image(image)
-                for i, enhanced in enumerate(enhanced_versions):
-                    all_versions.append((f'low_light_{i}', enhanced))
-            
-            # Crear variaciones para lentes
-            glasses_variations = self.create_glasses_variations(image)
-            for i, variation in enumerate(glasses_variations):
-                all_versions.append((f'glasses_var_{i}', variation))
-            
-            # Procesar cada versión
-            all_encodings = []
-            successful_versions = []
-            
-            for version_name, version_image in all_versions:
-                try:
-                    version_array = np.array(version_image)
-                    face_locations = self.robust_face_detection(version_array)
-                    
-                    if face_locations:
-                        # Usar la cara más grande
-                        best_face = max(face_locations, key=lambda f: (f[2]-f[0])*(f[1]-f[3]))
-                        
-                        # Generar encoding con menos jitters para ser más rápido
-                        encodings = face_recognition.face_encodings(
-                            version_array,
-                            [best_face],
-                            num_jitters=3,  # Reducido para velocidad
-                            model="large"
+
+    def extract_face_landmarks(self, image_array):
+        face_landmarks_list = face_recognition.face_landmarks(image_array)
+        
+        if not face_landmarks_list:
+            return None
+        
+        landmarks = face_landmarks_list[0]
+        
+        key_points = {
+            'nose_bridge': landmarks.get('nose_bridge', []),
+            'nose_tip': landmarks.get('nose_tip', []),
+            'chin': landmarks.get('chin', []),
+            'left_eye': landmarks.get('left_eye', []),
+            'right_eye': landmarks.get('right_eye', []),
+            'left_eyebrow': landmarks.get('left_eyebrow', []),
+            'right_eyebrow': landmarks.get('right_eyebrow', []),
+        }
+        
+        points_vector = []
+        for feature, points in key_points.items():
+            for point in points:
+                points_vector.extend(point)
+        
+        return np.array(points_vector)
+
+    def create_augmented_encodings(self, image_array, face_location):
+        augmented_encodings = []
+        
+        original_encoding = face_recognition.face_encodings(
+            image_array, [face_location], num_jitters=5, model="large"
+        )
+        if original_encoding:
+            augmented_encodings.append(original_encoding[0])
+        
+        image = Image.fromarray(image_array)
+        
+        top, right, bottom, left = face_location
+        eye_area_top = top + int((bottom - top) * 0.2)
+        eye_area_bottom = top + int((bottom - top) * 0.4)
+        
+        shadowed = image.copy()
+        draw = ImageDraw.Draw(shadowed)
+        for i in range(3):
+            alpha = 30 + i * 10
+            overlay = Image.new('RGBA', shadowed.size, (0, 0, 0, 0))
+            draw_overlay = ImageDraw.Draw(overlay)
+            draw_overlay.rectangle(
+                [left, eye_area_top, right, eye_area_bottom],
+                fill=(0, 0, 0, alpha)
+            )
+            shadowed = Image.alpha_composite(
+                shadowed.convert('RGBA'), 
+                overlay
+            ).convert('RGB')
+        
+        shadow_encoding = face_recognition.face_encodings(
+            np.array(shadowed), [face_location], num_jitters=2
+        )
+        if shadow_encoding:
+            augmented_encodings.append(shadow_encoding[0])
+        
+        bright = ImageEnhance.Brightness(image).enhance(1.3)
+        bright_encoding = face_recognition.face_encodings(
+            np.array(bright), [face_location], num_jitters=2
+        )
+        if bright_encoding:
+            augmented_encodings.append(bright_encoding[0])
+        
+        contrast = ImageEnhance.Contrast(image).enhance(1.5)
+        contrast_encoding = face_recognition.face_encodings(
+            np.array(contrast), [face_location], num_jitters=2
+        )
+        if contrast_encoding:
+            augmented_encodings.append(contrast_encoding[0])
+        
+        blurred = image.filter(ImageFilter.GaussianBlur(radius=0.5))
+        blur_encoding = face_recognition.face_encodings(
+            np.array(blurred), [face_location], num_jitters=2
+        )
+        if blur_encoding:
+            augmented_encodings.append(blur_encoding[0])
+        
+        return augmented_encodings
+
+    def process_registration_photos(self, photos_base64):
+        all_encodings = []
+        all_landmarks = []
+        all_augmented = []
+        valid_photos = 0
+        failed_photos = []
+        
+        print(f"\n📸 Iniciando procesamiento de {len(photos_base64)} fotos...")
+        
+        for idx, photo_base64 in enumerate(photos_base64):
+            try:
+                print(f"   Procesando foto {idx+1}/{len(photos_base64)}...")
+                
+                if ',' in photo_base64:
+                    photo_base64 = photo_base64.split(',')[1]
+                
+                image_data = base64.b64decode(photo_base64)
+                image = Image.open(io.BytesIO(image_data))
+                
+                if image.mode != 'RGB':
+                    image = image.convert('RGB')
+                
+                if image.width > 800:
+                    ratio = 800 / image.width
+                    new_height = int(image.height * ratio)
+                    image = image.resize((800, new_height), Image.Resampling.LANCZOS)
+                
+                image_array = np.array(image)
+                
+                face_locations = []
+                
+                face_locations = face_recognition.face_locations(
+                    image_array,
+                    number_of_times_to_upsample=1,
+                    model="hog"
+                )
+                
+                if not face_locations:
+                    face_locations = face_recognition.face_locations(
+                        image_array,
+                        number_of_times_to_upsample=2,
+                        model="hog"
+                    )
+                
+                if not face_locations:
+                    try:
+                        face_locations = face_recognition.face_locations(
+                            image_array,
+                            model="cnn"
                         )
-                        
-                        if encodings:
-                            all_encodings.append({
-                                'encoding': encodings[0].tolist(),
-                                'version': version_name,
-                                'face_location': best_face,
-                                'brightness': self.detect_brightness_level(version_array)
-                            })
-                            successful_versions.append(version_name)
-                            print(f"✅ Encoding exitoso para versión: {version_name}")
-                    
-                except Exception as e:
-                    print(f"❌ Error procesando {version_name}: {e}")
+                    except:
+                        pass
+                
+                if not face_locations:
+                    try:
+                        enhanced = ImageEnhance.Contrast(image).enhance(1.5)
+                        enhanced_array = np.array(enhanced)
+                        face_locations = face_recognition.face_locations(
+                            enhanced_array,
+                            number_of_times_to_upsample=1,
+                            model="hog"
+                        )
+                        if face_locations:
+                            image_array = enhanced_array
+                    except:
+                        pass
+                
+                if not face_locations:
+                    print(f"   ⚠️ Foto {idx+1}: No se detectó rostro")
+                    failed_photos.append(idx+1)
+                    all_encodings.append(None)
+                    all_landmarks.append(None)
+                    all_augmented.append([])
                     continue
-            
-            if not all_encodings:
-                return None, "No se pudo detectar rostro en ninguna versión"
-            
-            # Seleccionar los mejores encodings
-            main_encoding = all_encodings[0]['encoding']  # Usar el primero como principal
-            alternative_encodings = [enc['encoding'] for enc in all_encodings[1:]]
-            
-            result = {
-                'main': main_encoding,
-                'alternatives': alternative_encodings,
-                'versions_processed': len(all_versions),
-                'successful_versions': successful_versions,
-                'brightness_level': brightness,
-                'enhanced_for_low_light': brightness < 80
-            }
-            
-            print(f"✅ Procesamiento exitoso: {len(all_encodings)} encodings generados")
-            return result, f"Procesado con {len(successful_versions)} versiones exitosas"
-            
-        except Exception as e:
-            return None, f"Error procesando imagen: {str(e)}"
-    
-    def flexible_face_comparison(self, stored_encodings_data, current_encoding):
-        """Comparación más flexible para cambios físicos"""
-        try:
-            # Obtener encodings almacenados
-            main_stored = np.array(stored_encodings_data.get('main', []))
-            alternatives_stored = stored_encodings_data.get('alternatives', [])
-            
-            if len(main_stored) == 0:
-                return False, 0.0, "Sin encodings almacenados"
-            
-            all_stored = [main_stored] + [np.array(alt) for alt in alternatives_stored if len(alt) > 0]
-            current_enc = np.array(current_encoding)
-            
-            all_confidences = []
-            
-            # Comparar con todos los encodings almacenados
-            for stored_enc in all_stored:
+                
+                face_location = face_locations[0]
+                
+                encodings = face_recognition.face_encodings(
+                    image_array,
+                    [face_location],
+                    num_jitters=10,
+                    model="large"
+                )
+                
+                if not encodings:
+                    encodings = face_recognition.face_encodings(
+                        image_array,
+                        [face_location],
+                        num_jitters=5,
+                        model="large"
+                    )
+                
+                if not encodings:
+                    encodings = face_recognition.face_encodings(
+                        image_array,
+                        [face_location],
+                        num_jitters=2,
+                        model="small"
+                    )
+                
+                if encodings:
+                    all_encodings.append(encodings[0].tolist())
+                    valid_photos += 1
+                    print(f"     - Encoding extraído")
+                else:
+                    all_encodings.append(None)
+                    failed_photos.append(idx+1)
+                
                 try:
-                    # Distancia euclidiana (método principal de face_recognition)
-                    distance = face_recognition.face_distance([stored_enc], current_enc)[0]
-                    euclidean_confidence = max(0, 1 - distance)
+                    landmarks = self.extract_face_landmarks(image_array)
+                    if landmarks is not None:
+                        all_landmarks.append(landmarks.tolist())
+                    else:
+                        all_landmarks.append(None)
+                except:
+                    all_landmarks.append(None)
+                
+                if encodings and self.SMART_CONFIG['use_augmentation']:
+                    try:
+                        augmented = self.create_augmented_encodings(image_array, face_location)
+                        all_augmented.append([enc.tolist() for enc in augmented])
+                    except:
+                        all_augmented.append([])
+                else:
+                    all_augmented.append([])
                     
-                    # Similitud coseno (mejor para variaciones de iluminación)
-                    cosine_sim = np.dot(stored_enc, current_enc) / (
-                        np.linalg.norm(stored_enc) * np.linalg.norm(current_enc)
-                    )
-                    cosine_confidence = (cosine_sim + 1) / 2  # Normalizar a 0-1
-                    
-                    # Correlación de Pearson
-                    correlation = np.corrcoef(stored_enc, current_enc)[0, 1]
-                    correlation = max(-1, min(1, correlation))  # Clamp
-                    correlation_confidence = (correlation + 1) / 2
-                    
-                    # Promedio ponderado (euclidiana tiene más peso)
-                    combined_confidence = (
-                        euclidean_confidence * 0.6 +
-                        cosine_confidence * 0.25 +
-                        correlation_confidence * 0.15
-                    )
-                    
-                    all_confidences.append({
-                        'euclidean': euclidean_confidence,
-                        'cosine': cosine_confidence,
-                        'correlation': correlation_confidence,
-                        'combined': combined_confidence,
-                        'distance': distance
-                    })
-                    
-                except Exception as e:
-                    print(f"Error comparando encoding: {e}")
-                    continue
+            except Exception as e:
+                print(f"   ❌ Foto {idx+1}: Error - {str(e)}")
+                all_encodings.append(None)
+                all_landmarks.append(None)
+                all_augmented.append([])
+                failed_photos.append(idx+1)
+        
+        valid_encodings = [enc for enc in all_encodings if enc is not None]
+        valid_landmarks = [lm for lm in all_landmarks if lm is not None]
+        valid_augmented = [aug for aug in all_augmented if aug and len(aug) > 0]
+        
+        return {
+            'encodings': valid_encodings,
+            'landmarks': valid_landmarks,
+            'augmented': valid_augmented,
+            'valid_photos': len(valid_encodings),
+            'total_photos': len(photos_base64),
+            'failed_photos': failed_photos
+        }
+
+    def intelligent_face_comparison(self, stored_data, current_encoding, current_landmarks, quick_mode=False):
+        stored_encodings = stored_data.get('encodings', [])
+        stored_landmarks = stored_data.get('landmarks', [])
+        stored_augmented = stored_data.get('augmented', [])
+        
+        if not stored_encodings:
+            return False, 0.0, "Sin datos de rostro"
+        
+        if self.SMART_CONFIG['strict_mode'] and current_landmarks is None:
+            return False, 0.0, "No se detectaron puntos faciales"
+        
+        all_scores = []
+        high_quality_scores = []
+        
+        all_stored_encs = [np.array(e) for e in stored_encodings if e is not None]
+        for aug_list in stored_augmented:
+            all_stored_encs.extend([np.array(e) for e in aug_list if e is not None])
+
+        for stored_enc_array in all_stored_encs:
+            euclidean_dist = face_recognition.face_distance([stored_enc_array], current_encoding)[0]
             
-            if not all_confidences:
-                return False, 0.0, "Error en todas las comparaciones"
+            if self.SMART_CONFIG['strict_mode'] and euclidean_dist > 0.6:
+                continue
             
-            # Obtener la mejor coincidencia
-            best_match = max(all_confidences, key=lambda x: x['combined'])
-            final_confidence = best_match['combined']
-            
-            # Determinar umbral dinámico
-            distance = best_match['distance']
-            
-            # Umbrales más permisivos
-            if distance <= 0.4:  # Muy similar
-                threshold = 0.60
-            elif distance <= 0.5:  # Similar con cambios menores
-                threshold = 0.50
-            elif distance <= 0.6:  # Cambios moderados (lentes, iluminación)
-                threshold = 0.45
-            else:  # Cambios mayores
-                threshold = 0.40
-            
-            is_match = final_confidence >= threshold
-            
-            # Información detallada para debug
-            match_info = f"Dist: {distance:.3f}, Conf: {final_confidence:.1%}, Umbral: {threshold:.1%}"
-            
-            print(f"🔍 Comparación: {match_info} -> {'✅ MATCH' if is_match else '❌ NO MATCH'}")
-            
-            return is_match, final_confidence, match_info
-            
-        except Exception as e:
-            print(f"❌ Error en comparación: {str(e)}")
-            return False, 0.0, f"Error: {str(e)}"
-    
-    def encode_face_from_base64(self, base64_image):
-        """Método principal para encoding (compatible)"""
-        return self.process_photo_with_auto_enhance(base64_image)
-    
-    def compare_faces(self, stored_data, current_encoding, tolerance=None):
-        """Método principal para comparación (compatible)"""
-        if isinstance(stored_data, dict):
-            # Nuevo formato con múltiples encodings
-            return self.flexible_face_comparison(stored_data, current_encoding)
-        else:
-            # Formato legacy - convertir
-            legacy_data = {
-                'main': stored_data if isinstance(stored_data, list) else stored_data.tolist(),
-                'alternatives': []
-            }
-            return self.flexible_face_comparison(legacy_data, current_encoding)
-    
-    def validate_image_quality(self, base64_image):
-        """Validación más permisiva"""
-        try:
-            if ',' in base64_image:
-                image_data = base64.b64decode(base64_image.split(',')[1])
+            if not quick_mode:
+                cosine_sim = 1 - distance.cosine(stored_enc_array, current_encoding)
+                correlation = np.corrcoef(stored_enc_array, current_encoding)[0, 1]
+                
+                score = (
+                    (1 - euclidean_dist) * 0.6 +
+                    cosine_sim * 0.25 +
+                    correlation * 0.15
+                )
+                
+                if score > 0.5:
+                    high_quality_scores.append(score)
             else:
-                image_data = base64.b64decode(base64_image)
+                score = 1 - euclidean_dist
             
-            image = Image.open(io.BytesIO(image_data))
+            all_scores.append(score)
+        
+        if self.SMART_CONFIG['strict_mode']:
+            if len(high_quality_scores) < self.SMART_CONFIG['min_matches']:
+                return False, 0.0, f"Insuficientes coincidencias ({len(high_quality_scores)}/{self.SMART_CONFIG['min_matches']})"
+        
+        landmark_match = False
+        if current_landmarks is not None and stored_landmarks:
+            landmark_similarities = []
             
-            # Validaciones básicas
-            if image.width < 150 or image.height < 150:
-                return False, "Imagen muy pequeña (mínimo 150x150)"
+            for stored_lm in stored_landmarks:
+                if stored_lm is not None:
+                    stored_lm_array = np.array(stored_lm)
+                    min_len = min(len(current_landmarks), len(stored_lm_array))
+                    
+                    if min_len > 100:
+                        lm_similarity = 1 - distance.cosine(
+                            current_landmarks[:min_len], 
+                            stored_lm_array[:min_len]
+                        )
+                        landmark_similarities.append(lm_similarity)
             
-            if image.width > 10000 or image.height > 10000:
-                return False, "Imagen muy grande"
+            if landmark_similarities:
+                landmark_score = np.mean(landmark_similarities)
+                
+                if self.SMART_CONFIG['strict_mode']:
+                    landmark_match = landmark_score > 0.65
+                    if not landmark_match:
+                        return False, 0.0, f"Geometría facial no coincide ({landmark_score:.1%})"
+        
+        if not all_scores:
+            return False, 0.0, "No hay coincidencias"
+        
+        if self.SMART_CONFIG['strict_mode'] and high_quality_scores:
+            final_score = np.mean(high_quality_scores)
+        else:
+            final_score = np.percentile(all_scores, 60)
+        
+        if final_score < self.SMART_CONFIG['min_confidence']:
+            return False, final_score, f"Confianza insuficiente ({final_score:.1%} < {self.SMART_CONFIG['min_confidence']:.0%})"
+        
+        is_match = final_score >= (1 - self.SMART_CONFIG['base_tolerance']) and final_score >= self.SMART_CONFIG['min_confidence']
+        confidence = min(1.0, final_score)
+        
+        return is_match, confidence, f"Score: {confidence:.1%}"
+
+    def process_video_for_encodings(self, video_path):
+        """Procesa un video para encontrar y devolver una lista de encodings faciales únicos."""
+        try:
+            video_capture = cv2.VideoCapture(video_path)
+            if not video_capture.isOpened():
+                return None, "No se pudo abrir el archivo de video"
+                
+            encodings = []
+            frame_count = 0
             
-            # Verificar que no esté completamente negra o blanca
-            image_array = np.array(image.convert('L'))
-            mean_brightness = np.mean(image_array)
+            while True:
+                ret, frame = video_capture.read()
+                if not ret:
+                    break
+                
+                frame_count += 1
+                if frame_count % (int(video_capture.get(cv2.CAP_PROP_FPS)) / self.VIDEO_FRAME_RATE) != 0:
+                    continue
+
+                rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                
+                face_locations = face_recognition.face_locations(rgb_frame)
+                frame_encodings = face_recognition.face_encodings(rgb_frame, face_locations)
+                
+                if frame_encodings:
+                    for encoding in frame_encodings:
+                        encodings.append(encoding.tolist())
             
-            if mean_brightness < 10:
-                return False, "Imagen muy oscura - usa el flash o mejora la iluminación"
-            elif mean_brightness > 245:
-                return False, "Imagen muy clara (sobreexpuesta)"
+            video_capture.release()
             
-            print(f"✅ Imagen válida: {image.width}x{image.height}, brillo: {mean_brightness:.1f}")
-            return True, "Imagen válida"
+            if not encodings:
+                return None, "No se detectó ningún rostro en el video."
+
+            unique_encodings = [np.array(encodings[0])]
+            for new_enc in encodings[1:]:
+                is_unique = True
+                for unique_enc in unique_encodings:
+                    if face_recognition.face_distance([unique_enc], new_enc)[0] < 0.4:
+                        is_unique = False
+                        break
+                if is_unique:
+                    unique_encodings.append(np.array(new_enc))
             
+            return [enc.tolist() for enc in unique_encodings], "Encodings extraídos exitosamente."
+
         except Exception as e:
-            return False, f"Error validando imagen: {str(e)}"
+            print(f"Error procesando video: {e}")
+            return None, f"Error interno: {e}"
+
+    def get_face_encoding(self, image_data_list):
+        encodings = []
+        for image_data in image_data_list:
+            if ',' in image_data:
+                image_data = base64.b64decode(image_data.split(',')[1])
+            else:
+                image_data = base64.b64decode(image_data)
+            
+            try:
+                image = face_recognition.load_image_file(io.BytesIO(image_data))
+                
+                face_encodings = face_recognition.face_encodings(image)
+                
+                if not face_encodings:
+                    enhanced_images = self.enhance_low_light_image(Image.fromarray(image))
+                    for enhanced_image in enhanced_images:
+                        enhanced_image_array = np.array(enhanced_image)
+                        face_encodings_enhanced = face_recognition.face_encodings(enhanced_image_array)
+                        if face_encodings_enhanced:
+                            face_encodings = face_encodings_enhanced
+                            break
+                
+                if face_encodings:
+                    encodings.append(face_encodings[0])
+            except Exception as e:
+                print(f"Error procesando imagen: {e}")
+                
+        return encodings
+    
+    def intelligent_verify(self, photo_base64):
+        """Procesar verificación con timeout"""
+        def verify_process():
+            try:
+                start_time = time.time()
+                
+                if ',' in photo_base64:
+                    photo_data = photo_base64.split(',')[1]
+                else:
+                    photo_data = photo_base64
+                
+                image_data = base64.b64decode(photo_data)
+                image = Image.open(io.BytesIO(image_data))
+                
+                if image.mode != 'RGB':
+                    image = image.convert('RGB')
+                
+                image = ImageOps.equalize(image)
+                image_array = np.array(image)
+                
+                face_locations = []
+                
+                if time.time() - start_time < 2:
+                    face_locations = face_recognition.face_locations(
+                        image_array,
+                        number_of_times_to_upsample=1,
+                        model="hog"
+                    )
+                
+                if not face_locations and (time.time() - start_time < self.SMART_CONFIG['verification_timeout']/2):
+                    try:
+                        face_locations = face_recognition.face_locations(
+                            image_array,
+                            model="cnn"
+                        )
+                    except:
+                        pass
+                
+                if not face_locations:
+                    return {'success': False, 'error': 'No se detectó rostro'}
+                
+                if self.SMART_CONFIG.get('require_full_face', True):
+                    face_valid, face_message = self.verify_face_quality(image_array, face_locations[0])
+                    if not face_valid:
+                        return {'success': False, 'error': f'Rostro inválido: {face_message}'}
+                
+                current_encoding = face_recognition.face_encodings(
+                    image_array,
+                    face_locations,
+                    num_jitters=2,
+                    model="large"
+                )[0]
+                
+                current_landmarks = None
+                if time.time() - start_time < self.SMART_CONFIG['verification_timeout'] * 0.8:
+                    try:
+                        current_landmarks = self.extract_face_landmarks(image_array)
+                    except:
+                        pass
+                
+                best_match = None
+                best_confidence = 0
+                all_results = []
+                
+                employees_with_faces = Employee.objects.filter(
+                    is_active=True,
+                    has_face_registered=True
+                )
+                
+                for employee in employees_with_faces:
+                    if time.time() - start_time > self.SMART_CONFIG['verification_timeout'] * 0.9:
+                        break
+                    
+                    try:
+                        stored_encodings_json = employee.face_encoding
+                        if not stored_encodings_json:
+                            continue
+                        
+                        stored_data = json.loads(stored_encodings_json)
+                        
+                        if isinstance(stored_data, list):
+                            # Formato de video
+                            known_encodings_np = [np.array(e) for e in stored_data]
+                            distances = face_recognition.face_distance(known_encodings_np, current_encoding)
+                            min_distance = np.min(distances)
+                            confidence = 1 - min_distance
+                            
+                            if confidence > best_confidence:
+                                best_confidence = confidence
+                                best_match = employee
+                                all_results.append({'employee': employee, 'confidence': confidence})
+
+                        elif isinstance(stored_data, dict):
+                            # Formato de fotos
+                            is_match, confidence, details = self.intelligent_face_comparison(
+                                stored_data,
+                                current_encoding,
+                                current_landmarks
+                            )
+                            
+                            all_results.append({
+                                'employee': employee,
+                                'confidence': confidence,
+                                'match': is_match
+                            })
+                            
+                            if is_match and confidence > best_confidence:
+                                best_confidence = confidence
+                                best_match = employee
+                            
+                    except Exception as e:
+                        continue
+                
+                return {
+                    'success': True,
+                    'data': {
+                        'best_match': best_match,
+                        'best_confidence': best_confidence,
+                        'all_results': all_results
+                    }
+                }
+                
+            except Exception as e:
+                return {'success': False, 'error': str(e)}
+        
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(verify_process)
+            
+            try:
+                result = future.result(timeout=self.SMART_CONFIG['verification_timeout'])
+                return result.get('data'), result.get('error')
+            except FutureTimeoutError:
+                future.cancel()
+                return None, "Timeout: La verificación excedió el tiempo límite."
+            except Exception as e:
+                return None, f"Error en verificación: {str(e)}"
+
+    def verify_face_quality(self, image_array, face_location):
+        """Verificar que el rostro sea de calidad suficiente y esté completo"""
+        top, right, bottom, left = face_location
+        
+        face_width = right - left
+        face_height = bottom - top
+        
+        if face_width < self.SMART_CONFIG['min_face_size'] or face_height < self.SMART_CONFIG['min_face_size']:
+            return False, "Rostro muy pequeño - acércate más a la cámara"
+        
+        image_height, image_width = image_array.shape[:2]
+        
+        margin = 15
+        if (left < margin or right > image_width - margin or 
+            top < margin or bottom > image_height - margin):
+            return False, "Rostro parcialmente cortado - centra tu cara"
+        
+        aspect_ratio = face_height / face_width
+        if aspect_ratio < 1.0 or aspect_ratio > 2.0:
+            return False, "Ángulo del rostro incorrecto"
+        
+        face_landmarks = face_recognition.face_landmarks(image_array, [face_location])
+        
+        if not face_landmarks:
+            return False, "No se detectaron características faciales"
+        
+        landmarks = face_landmarks[0]
+        
+        required_features = ['chin', 'left_eye', 'right_eye', 'nose_bridge', 'nose_tip']
+        missing_features = []
+        
+        for feature in required_features:
+            if feature not in landmarks or not landmarks[feature]:
+                missing_features.append(feature)
+        
+        if missing_features:
+            return False, f"Características faltantes: {', '.join(missing_features)}"
+        
+        if len(landmarks.get('left_eye', [])) < 4 or len(landmarks.get('right_eye', [])) < 4:
+            return False, "Ambos ojos deben estar visibles"
+        
+        chin_points = landmarks.get('chin', [])
+        if len(chin_points) < 15:
+            return False, "Barbilla no visible completa"
+        
+        return True, "Rostro válido"

@@ -17,31 +17,21 @@ import cv2
 from scipy.spatial import distance
 import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
+from django.core.files.base import ContentFile
+from django.core.files.storage import default_storage
+from django.http import HttpRequest
 
 from .models import Employee, AttendanceRecord
 from .serializers import EmployeeSerializer, AttendanceRecordSerializer
+from .face_recognition_utils import ImprovedFaceRecognitionService
 
-# Carpeta para guardar las fotos de empleados
+face_recognition_service = ImprovedFaceRecognitionService()
+SMART_CONFIG = face_recognition_service.SMART_CONFIG
+
 FACE_IMAGES_DIR = 'media/employee_faces/'
 os.makedirs(FACE_IMAGES_DIR, exist_ok=True)
 
-# Configuración del sistema inteligente
-SMART_CONFIG = {
-    'min_photos': 8,  # Aumentado para más variabilidad
-    'base_tolerance': 0.30,  # Más permisivo para cambios físicos
-    'adaptive_tolerance': True,
-    'min_confidence': 0.65,  # Reducido para ser más tolerante
-    'min_matches': 2,  # Reducido
-    'use_landmarks': True,
-    'use_augmentation': True,
-    'max_tolerance': 0.35,  # Más permisivo
-    'verification_timeout': 5,
-    'strict_mode': False,  # Cambiado a False para ser más tolerante
-    'require_full_face': False,  # Más permisivo con rostros parciales
-    'min_face_size': 60,  # Reducido
-    'expression_variance': True,  # Nueva opción
-    'lighting_adaptation': True,  # Nueva opción
-}
+
 @api_view(['GET'])
 def health_check(request):
     """Estado del sistema inteligente"""
@@ -70,547 +60,10 @@ def health_check(request):
         }
     })
 
-def verify_face_quality(image_array, face_location):
-    """Verificar que el rostro sea de calidad suficiente y esté completo"""
-    top, right, bottom, left = face_location
-    
-    face_width = right - left
-    face_height = bottom - top
-    
-    if face_width < SMART_CONFIG['min_face_size'] or face_height < SMART_CONFIG['min_face_size']:
-        return False, "Rostro muy pequeño - acércate más a la cámara"
-    
-    image_height, image_width = image_array.shape[:2]
-    
-    margin = 15
-    if (left < margin or right > image_width - margin or 
-        top < margin or bottom > image_height - margin):
-        return False, "Rostro parcialmente cortado - centra tu cara"
-    
-    aspect_ratio = face_height / face_width
-    if aspect_ratio < 1.0 or aspect_ratio > 2.0:
-        return False, "Ángulo del rostro incorrecto"
-    
-    face_landmarks = face_recognition.face_landmarks(image_array, [face_location])
-    
-    if not face_landmarks:
-        return False, "No se detectaron características faciales"
-    
-    landmarks = face_landmarks[0]
-    
-    required_features = ['chin', 'left_eye', 'right_eye', 'nose_bridge', 'nose_tip']
-    missing_features = []
-    
-    for feature in required_features:
-        if feature not in landmarks or not landmarks[feature]:
-            missing_features.append(feature)
-    
-    if missing_features:
-        return False, f"Características faltantes: {', '.join(missing_features)}"
-    
-    if len(landmarks.get('left_eye', [])) < 4 or len(landmarks.get('right_eye', [])) < 4:
-        return False, "Ambos ojos deben estar visibles"
-    
-    chin_points = landmarks.get('chin', [])
-    if len(chin_points) < 15:
-        return False, "Barbilla no visible completa"
-    
-    return True, "Rostro válido"
-
-def extract_face_landmarks(image_array):
-    """Extraer puntos faciales clave (68 puntos)"""
-    face_landmarks_list = face_recognition.face_landmarks(image_array)
-    
-    if not face_landmarks_list:
-        return None
-    
-    landmarks = face_landmarks_list[0]
-    
-    key_points = {
-        'nose_bridge': landmarks.get('nose_bridge', []),
-        'nose_tip': landmarks.get('nose_tip', []),
-        'chin': landmarks.get('chin', []),
-        'left_eye': landmarks.get('left_eye', []),
-        'right_eye': landmarks.get('right_eye', []),
-        'left_eyebrow': landmarks.get('left_eyebrow', []),
-        'right_eyebrow': landmarks.get('right_eyebrow', []),
-    }
-    
-    points_vector = []
-    for feature, points in key_points.items():
-        for point in points:
-            points_vector.extend(point)
-    
-    return np.array(points_vector)
-
-def normalize_face_features(encoding, landmarks):
-    """Normalizar características faciales"""
-    if landmarks is not None:
-        eye_distance = np.linalg.norm(
-            np.array(landmarks[36*2:36*2+2]) - np.array(landmarks[45*2:45*2+2])
-        ) if len(landmarks) > 90 else 1.0
-        
-        if eye_distance > 0:
-            normalized_landmarks = landmarks / eye_distance
-        else:
-            normalized_landmarks = landmarks
-    else:
-        normalized_landmarks = np.zeros(136)
-    
-    combined = np.concatenate([
-        encoding * 0.7,
-        normalized_landmarks[:50] * 0.3
-    ])
-    
-    return combined
-
-def create_augmented_encodings(image_array, face_location):
-    """Crear variaciones artificiales"""
-    augmented_encodings = []
-    
-    original_encoding = face_recognition.face_encodings(
-        image_array, [face_location], num_jitters=5, model="large"
-    )
-    if original_encoding:
-        augmented_encodings.append(original_encoding[0])
-    
-    image = Image.fromarray(image_array)
-    
-    top, right, bottom, left = face_location
-    eye_area_top = top + int((bottom - top) * 0.2)
-    eye_area_bottom = top + int((bottom - top) * 0.4)
-    
-    # Variación con sombras
-    shadowed = image.copy()
-    draw = ImageDraw.Draw(shadowed)
-    for i in range(3):
-        alpha = 30 + i * 10
-        overlay = Image.new('RGBA', shadowed.size, (0, 0, 0, 0))
-        draw_overlay = ImageDraw.Draw(overlay)
-        draw_overlay.rectangle(
-            [left, eye_area_top, right, eye_area_bottom],
-            fill=(0, 0, 0, alpha)
-        )
-        shadowed = Image.alpha_composite(
-            shadowed.convert('RGBA'), 
-            overlay
-        ).convert('RGB')
-    
-    shadow_encoding = face_recognition.face_encodings(
-        np.array(shadowed), [face_location], num_jitters=2
-    )
-    if shadow_encoding:
-        augmented_encodings.append(shadow_encoding[0])
-    
-    # Variación con brillo
-    bright = ImageEnhance.Brightness(image).enhance(1.3)
-    bright_encoding = face_recognition.face_encodings(
-        np.array(bright), [face_location], num_jitters=2
-    )
-    if bright_encoding:
-        augmented_encodings.append(bright_encoding[0])
-    
-    # Variación con contraste
-    contrast = ImageEnhance.Contrast(image).enhance(1.5)
-    contrast_encoding = face_recognition.face_encodings(
-        np.array(contrast), [face_location], num_jitters=2
-    )
-    if contrast_encoding:
-        augmented_encodings.append(contrast_encoding[0])
-    
-    # Variación con desenfoque
-    blurred = image.filter(ImageFilter.GaussianBlur(radius=0.5))
-    blur_encoding = face_recognition.face_encodings(
-        np.array(blurred), [face_location], num_jitters=2
-    )
-    if blur_encoding:
-        augmented_encodings.append(blur_encoding[0])
-    
-    return augmented_encodings
-
-def intelligent_face_comparison(stored_data, current_encoding, current_landmarks, quick_mode=False):
-    """Comparación inteligente ESTRICTA"""
-    stored_encodings = stored_data.get('encodings', [])
-    stored_landmarks = stored_data.get('landmarks', [])
-    stored_augmented = stored_data.get('augmented', [])
-    
-    if not stored_encodings:
-        return False, 0.0, "Sin datos de rostro"
-    
-    if SMART_CONFIG['strict_mode'] and current_landmarks is None:
-        return False, 0.0, "No se detectaron puntos faciales"
-    
-    all_scores = []
-    high_quality_scores = []
-    
-    for i, stored_enc in enumerate(stored_encodings):
-        if stored_enc is None:
-            continue
-            
-        stored_enc_array = np.array(stored_enc)
-        
-        euclidean_dist = face_recognition.face_distance([stored_enc_array], current_encoding)[0]
-        
-        if SMART_CONFIG['strict_mode'] and euclidean_dist > 0.6:
-            continue
-        
-        if not quick_mode:
-            cosine_sim = 1 - distance.cosine(stored_enc_array, current_encoding)
-            correlation = np.corrcoef(stored_enc_array, current_encoding)[0, 1]
-            
-            score = (
-                (1 - euclidean_dist) * 0.6 +
-                cosine_sim * 0.25 +
-                correlation * 0.15
-            )
-            
-            if score > 0.5:
-                high_quality_scores.append(score)
-        else:
-            score = 1 - euclidean_dist
-        
-        all_scores.append(score)
-    
-    if SMART_CONFIG['strict_mode']:
-        if len(high_quality_scores) < SMART_CONFIG['min_matches']:
-            return False, 0.0, f"Insuficientes coincidencias ({len(high_quality_scores)}/{SMART_CONFIG['min_matches']})"
-    
-    landmark_match = False
-    if current_landmarks is not None and stored_landmarks:
-        landmark_similarities = []
-        
-        for stored_lm in stored_landmarks:
-            if stored_lm is not None:
-                stored_lm_array = np.array(stored_lm)
-                min_len = min(len(current_landmarks), len(stored_lm_array))
-                
-                if min_len > 100:
-                    lm_similarity = 1 - distance.cosine(
-                        current_landmarks[:min_len], 
-                        stored_lm_array[:min_len]
-                    )
-                    landmark_similarities.append(lm_similarity)
-        
-        if landmark_similarities:
-            landmark_score = np.mean(landmark_similarities)
-            
-            if SMART_CONFIG['strict_mode']:
-                landmark_match = landmark_score > 0.65
-                if not landmark_match:
-                    return False, 0.0, f"Geometría facial no coincide ({landmark_score:.1%})"
-    
-    if not all_scores:
-        return False, 0.0, "No hay coincidencias"
-    
-    if SMART_CONFIG['strict_mode'] and high_quality_scores:
-        final_score = np.mean(high_quality_scores)
-    else:
-        final_score = np.percentile(all_scores, 60)
-    
-    if SMART_CONFIG['strict_mode']:
-        tolerance = SMART_CONFIG['base_tolerance']
-    else:
-        tolerance = SMART_CONFIG['max_tolerance']
-    
-    if final_score < SMART_CONFIG['min_confidence']:
-        return False, final_score, f"Confianza insuficiente ({final_score:.1%} < {SMART_CONFIG['min_confidence']:.0%})"
-    
-    is_match = final_score >= (1 - tolerance) and final_score >= SMART_CONFIG['min_confidence']
-    confidence = min(1.0, final_score)
-    
-    print(f"\n🔒 Verificación ESTRICTA:")
-    print(f"   Score final: {final_score:.3f}")
-    print(f"   Coincidencias de alta calidad: {len(high_quality_scores)}")
-    print(f"   Decisión: {'✅ AUTORIZADO' if is_match else '❌ RECHAZADO'}")
-    
-    return is_match, confidence, f"Score: {confidence:.1%}"
-
-def process_registration_photos(photos_base64):
-    """Procesar múltiples fotos para registro"""
-    all_encodings = []
-    all_landmarks = []
-    all_augmented = []
-    valid_photos = 0
-    failed_photos = []
-    
-    print(f"\n📸 Iniciando procesamiento de {len(photos_base64)} fotos...")
-    
-    for idx, photo_base64 in enumerate(photos_base64):
-        try:
-            print(f"   Procesando foto {idx+1}/{len(photos_base64)}...")
-            
-            if ',' in photo_base64:
-                photo_base64 = photo_base64.split(',')[1]
-            
-            image_data = base64.b64decode(photo_base64)
-            image = Image.open(io.BytesIO(image_data))
-            
-            if image.mode != 'RGB':
-                image = image.convert('RGB')
-            
-            if image.width > 800:
-                ratio = 800 / image.width
-                new_height = int(image.height * ratio)
-                image = image.resize((800, new_height), Image.Resampling.LANCZOS)
-            
-            image_array = np.array(image)
-            
-            face_locations = []
-            
-            face_locations = face_recognition.face_locations(
-                image_array,
-                number_of_times_to_upsample=1,
-                model="hog"
-            )
-            
-            if not face_locations:
-                face_locations = face_recognition.face_locations(
-                    image_array,
-                    number_of_times_to_upsample=2,
-                    model="hog"
-                )
-            
-            if not face_locations:
-                try:
-                    face_locations = face_recognition.face_locations(
-                        image_array,
-                        model="cnn"
-                    )
-                except:
-                    pass
-            
-            if not face_locations:
-                try:
-                    enhanced = ImageEnhance.Contrast(image).enhance(1.5)
-                    enhanced_array = np.array(enhanced)
-                    face_locations = face_recognition.face_locations(
-                        enhanced_array,
-                        number_of_times_to_upsample=1,
-                        model="hog"
-                    )
-                    if face_locations:
-                        image_array = enhanced_array
-                except:
-                    pass
-            
-            if not face_locations:
-                print(f"   ⚠️ Foto {idx+1}: No se detectó rostro")
-                failed_photos.append(idx+1)
-                all_encodings.append(None)
-                all_landmarks.append(None)
-                all_augmented.append([])
-                continue
-            
-            face_location = face_locations[0]
-            
-            encodings = face_recognition.face_encodings(
-                image_array,
-                [face_location],
-                num_jitters=10,
-                model="large"
-            )
-            
-            if not encodings:
-                encodings = face_recognition.face_encodings(
-                    image_array,
-                    [face_location],
-                    num_jitters=5,
-                    model="large"
-                )
-            
-            if not encodings:
-                encodings = face_recognition.face_encodings(
-                    image_array,
-                    [face_location],
-                    num_jitters=2,
-                    model="small"
-                )
-            
-            if encodings:
-                all_encodings.append(encodings[0].tolist())
-                valid_photos += 1
-                print(f"     - Encoding extraído")
-            else:
-                all_encodings.append(None)
-                failed_photos.append(idx+1)
-            
-            try:
-                landmarks = extract_face_landmarks(image_array)
-                if landmarks is not None:
-                    all_landmarks.append(landmarks.tolist())
-                else:
-                    all_landmarks.append(None)
-            except:
-                all_landmarks.append(None)
-            
-            if encodings and SMART_CONFIG['use_augmentation']:
-                try:
-                    augmented = create_augmented_encodings(image_array, face_location)
-                    all_augmented.append([enc.tolist() for enc in augmented])
-                except:
-                    all_augmented.append([])
-            else:
-                all_augmented.append([])
-                
-        except Exception as e:
-            print(f"   ❌ Foto {idx+1}: Error - {str(e)}")
-            all_encodings.append(None)
-            all_landmarks.append(None)
-            all_augmented.append([])
-            failed_photos.append(idx+1)
-    
-    valid_encodings = [enc for enc in all_encodings if enc is not None]
-    valid_landmarks = [lm for lm in all_landmarks if lm is not None]
-    valid_augmented = [aug for aug in all_augmented if aug and len(aug) > 0]
-    
-    return {
-        'encodings': valid_encodings,
-        'landmarks': valid_landmarks,
-        'augmented': valid_augmented,
-        'valid_photos': len(valid_encodings),
-        'total_photos': len(photos_base64),
-        'failed_photos': failed_photos
-    }
-
-def process_verification_with_timeout(photo_base64, timeout=10):
-    """Procesar verificación con timeout"""
-    def verify_process():
-        try:
-            start_time = time.time()
-            
-            if ',' in photo_base64:
-                photo_data = photo_base64.split(',')[1]
-            else:
-                photo_data = photo_base64
-            
-            image_data = base64.b64decode(photo_data)
-            image = Image.open(io.BytesIO(image_data))
-            
-            if image.mode != 'RGB':
-                image = image.convert('RGB')
-            
-            image = ImageOps.equalize(image)
-            image_array = np.array(image)
-            
-            face_locations = []
-            
-            if time.time() - start_time < 2:
-                face_locations = face_recognition.face_locations(
-                    image_array,
-                    number_of_times_to_upsample=1,
-                    model="hog"
-                )
-            
-            if not face_locations and (time.time() - start_time < timeout/2):
-                try:
-                    face_locations = face_recognition.face_locations(
-                        image_array,
-                        model="cnn"
-                    )
-                except:
-                    pass
-            
-            if not face_locations:
-                return {'success': False, 'error': 'No se detectó rostro'}
-            
-            if SMART_CONFIG.get('require_full_face', True):
-                face_valid, face_message = verify_face_quality(image_array, face_locations[0])
-                if not face_valid:
-                    return {'success': False, 'error': f'Rostro inválido: {face_message}'}
-            
-            current_encoding = face_recognition.face_encodings(
-                image_array,
-                face_locations,
-                num_jitters=2,
-                model="large"
-            )[0]
-            
-            current_landmarks = None
-            if time.time() - start_time < timeout * 0.8:
-                try:
-                    current_landmarks = extract_face_landmarks(image_array)
-                except:
-                    pass
-            
-            best_match = None
-            best_confidence = 0
-            all_results = []
-            
-            employees_with_faces = Employee.objects.filter(
-                is_active=True,
-                has_face_registered=True
-            )
-            
-            for employee in employees_with_faces:
-                if time.time() - start_time > timeout * 0.9:
-                    break
-                
-                try:
-                    stored_data = json.loads(employee.face_encoding)
-                    
-                    if time.time() - start_time > timeout * 0.7:
-                        if stored_data.get('encodings'):
-                            stored_enc = np.array(stored_data['encodings'][0])
-                            distance_val = face_recognition.face_distance([stored_enc], current_encoding)[0]
-                            confidence = 1 - distance_val
-                            
-                            if confidence > 0.45:
-                                all_results.append({
-                                    'employee': employee,
-                                    'confidence': confidence,
-                                    'match': confidence > 0.5
-                                })
-                                
-                                if confidence > best_confidence:
-                                    best_confidence = confidence
-                                    best_match = employee
-                    else:
-                        is_match, confidence, details = intelligent_face_comparison(
-                            stored_data,
-                            current_encoding,
-                            current_landmarks
-                        )
-                        
-                        all_results.append({
-                            'employee': employee,
-                            'confidence': confidence,
-                            'match': is_match
-                        })
-                        
-                        if is_match and confidence > best_confidence:
-                            best_confidence = confidence
-                            best_match = employee
-                        
-                except Exception as e:
-                    continue
-            
-            return {
-                'success': True,
-                'data': {
-                    'best_match': best_match,
-                    'best_confidence': best_confidence,
-                    'all_results': all_results
-                }
-            }
-            
-        except Exception as e:
-            return {'success': False, 'error': str(e)}
-    
-    with ThreadPoolExecutor(max_workers=1) as executor:
-        future = executor.submit(verify_process)
-        
-        try:
-            result = future.result(timeout=timeout)
-            return result.get('data'), result.get('error')
-        except FutureTimeoutError:
-            future.cancel()
-            return None, "Timeout: La verificación excedió los 10 segundos"
-        except Exception as e:
-            return None, f"Error en verificación: {str(e)}"
 
 @api_view(['POST'])
 def create_employee(request):
-    """Crear empleado con registro facial"""
+    """Crear empleado con registro facial (fotos)"""
     try:
         data = request.data
         name = data.get('name', '').strip()
@@ -640,7 +93,7 @@ def create_employee(request):
         if not email:
             email = f"{employee_id.lower()}@empresa.com"
         
-        face_data = process_registration_photos(photos)
+        face_data = face_recognition_service.process_registration_photos(photos)
         
         min_valid_required = 3
         
@@ -732,7 +185,7 @@ def register_employee_face(request):
                 'message': 'Empleado no encontrado'
             }, status=404)
         
-        face_data = process_registration_photos(photos)
+        face_data = face_recognition_service.process_registration_photos(photos)
         
         min_valid_required = 3
         
@@ -812,14 +265,13 @@ def verify_attendance_face(request):
         print(f"\n⏱️ Iniciando verificación con timeout de {SMART_CONFIG['verification_timeout']}s...")
         start_time = time.time()
         
-        verification_result, error = process_verification_with_timeout(
-            photo_base64, 
-            timeout=SMART_CONFIG['verification_timeout']
+        verification_result, error = face_recognition_service.intelligent_verify(
+            photo_base64
         )
         
         elapsed_time = time.time() - start_time
         
-        if error == "Timeout: La verificación excedió los 10 segundos":
+        if error and "Timeout" in error:
             return Response({
                 'success': False,
                 'message': '⏱️ VERIFICACIÓN CANCELADA - Tiempo límite excedido',
@@ -1042,11 +494,9 @@ def sync_offline_records(request):
         
         for record_data in offline_records:
             try:
-                from django.http import HttpRequest
-                mock_request = HttpRequest()
-                mock_request.method = 'POST'
-                
                 if record_data.get('photo'):
+                    mock_request = HttpRequest()
+                    mock_request.method = 'POST'
                     mock_request.data = {
                         'photo': record_data['photo'],
                         'type': record_data.get('type', 'entrada'),
@@ -1058,6 +508,8 @@ def sync_offline_records(request):
                     }
                     response = verify_attendance_face(mock_request)
                 else:
+                    mock_request = HttpRequest()
+                    mock_request.method = 'POST'
                     mock_request.data = {
                         'employee_name': record_data.get('employee_name'),
                         'employee_id': record_data.get('employee_id'),
@@ -1071,7 +523,7 @@ def sync_offline_records(request):
                     }
                     response = mark_attendance(mock_request)
                 
-                if response.status_code == 200:
+                if response.status_code in [200, 201]:
                     synced_count += 1
                 else:
                     errors.append({
@@ -1224,3 +676,88 @@ def delete_attendance(request, attendance_id):
 def attendance_panel(request):
     """Panel web"""
     return render(request, 'attendance_panel.html')
+
+
+# Nuevas vistas para el registro de video
+@api_view(['POST'])
+def register_face_video(request):
+    """Registro inteligente con un video"""
+    try:
+        employee_id = request.data.get('employee_id')
+        video_file = request.FILES.get('video')
+
+        if not employee_id or not video_file:
+            return Response({'success': False, 'message': 'Faltan campos requeridos'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        try:
+            employee = Employee.objects.get(id=employee_id, is_active=True)
+        except Employee.DoesNotExist:
+            return Response({'success': False, 'message': 'Empleado no encontrado'}, status=status.HTTP_404_NOT_FOUND)
+
+        temp_path = default_storage.save(f"temp_videos/{uuid.uuid4()}.mp4", ContentFile(video_file.read()))
+        full_path = default_storage.path(temp_path)
+
+        encodings, message = face_recognition_service.process_video_for_encodings(full_path)
+
+        default_storage.delete(temp_path)
+
+        if not encodings:
+            return Response({'success': False, 'message': message}, status=status.HTTP_400_BAD_REQUEST)
+        
+        employee.face_encoding = json.dumps(encodings)
+        employee.has_face_registered = True
+        employee.face_registration_date = timezone.now()
+        employee.save()
+        
+        return Response({'success': True, 'message': 'Rostro registrado con éxito a partir de video'}, status=status.HTTP_200_OK)
+    except Exception as e:
+        return Response({'success': False, 'message': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['POST'])
+def create_employee_with_video(request):
+    """Crear empleado con registro facial por video"""
+    try:
+        name = request.data.get('name')
+        department = request.data.get('department', 'General').strip()
+        position = request.data.get('position', 'Empleado').strip()
+        email = request.data.get('email', '').strip()
+        video_file = request.FILES.get('video')
+        
+        if not name or not video_file:
+            return Response({'success': False, 'message': 'Faltan campos requeridos'}, status=status.HTTP_400_BAD_REQUEST)
+
+        employee_id = f"EMP{str(uuid.uuid4())[:8].upper()}"
+        while Employee.objects.filter(employee_id=employee_id).exists():
+            employee_id = f"EMP{str(uuid.uuid4())[:8].upper()}"
+
+        if not email:
+            email = f"{employee_id.lower()}@empresa.com"
+
+        temp_path = default_storage.save(f"temp_videos/{uuid.uuid4()}.mp4", ContentFile(video_file.read()))
+        full_path = default_storage.path(temp_path)
+        
+        encodings, message = face_recognition_service.process_video_for_encodings(full_path)
+
+        default_storage.delete(temp_path)
+
+        if not encodings:
+            return Response({'success': False, 'message': message}, status=status.HTTP_400_BAD_REQUEST)
+        
+        employee = Employee.objects.create(
+            name=name,
+            employee_id=employee_id,
+            department=department,
+            position=position,
+            email=email,
+            is_active=True,
+            has_face_registered=True,
+            face_encoding=json.dumps(encodings),
+            face_registration_date=timezone.now(),
+        )
+        
+        serializer = EmployeeSerializer(employee)
+        
+        return Response({'success': True, 'message': 'Empleado creado y rostro registrado por video', 'employee': serializer.data}, status=status.HTTP_201_CREATED)
+    except Exception as e:
+        return Response({'success': False, 'message': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

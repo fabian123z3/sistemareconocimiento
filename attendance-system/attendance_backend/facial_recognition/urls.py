@@ -26,4 +26,8 @@ urlpatterns = [
     
     # Panel web
     path('panel/', views.attendance_panel, name='attendance_panel'),
+
+    # Nuevas rutas para video
+    path('register-face-video/', views.register_face_video, name='register-face-video'),
+    path('create-employee-with-video/', views.create_employee_with_video, name='create-employee-with-video'),
 ]
