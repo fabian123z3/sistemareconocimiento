@@ -12,7 +12,6 @@ import {
   SafeAreaView,
   RefreshControl,
   Platform,
-  PermissionsAndroid
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -21,7 +20,7 @@ import * as Location from 'expo-location';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as Brightness from 'expo-brightness';
 import * as ImageManipulator from 'expo-image-manipulator';
-import * as FileSystem from 'expo-file-system';
+import { PermissionsAndroid } from 'react-native/Libraries/PermissionsAndroid/PermissionsAndroid';
 
 const API_BASE_URL = 'http://192.168.96.36:8000/api';
 const VIDEO_REGISTRATION_DURATION = 15;
@@ -145,30 +144,6 @@ export default function App() {
       }
     };
   }, [isRecording]);
-
-  // Función para solicitar permisos de audio en Android
-  const requestAudioPermission = async () => {
-    if (Platform.OS === 'android') {
-      try {
-        const granted = await PermissionsAndroid.request(
-          PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
-          {
-            title: 'Permiso de Audio',
-            message: 'Esta aplicación necesita acceso al micrófono para grabar videos de registro facial',
-            buttonNeutral: 'Preguntar después',
-            buttonNegative: 'Cancelar',
-            buttonPositive: 'OK',
-          }
-        );
-        
-        return granted === PermissionsAndroid.RESULTS.GRANTED;
-      } catch (err) {
-        console.warn(err);
-        return false;
-      }
-    }
-    return true; // En iOS se maneja automáticamente por el plugin
-  };
 
   const initializeApp = async () => {
     await loadStoredData();
@@ -330,77 +305,73 @@ export default function App() {
     }
   };
 
- const startVideoRecording = async () => {
-  if (!cameraRef.current) return;
-  
-  // Verificar permisos múltiples veces
-  let hasAudioPermission = false;
-  
-  try {
-    // Primer intento
-    hasAudioPermission = await requestAudioPermission();
+  // Función para solicitar permisos de audio en Android
+  const requestAudioPermission = async () => {
+    if (Platform.OS === 'android') {
+      try {
+        const granted = await PermissionsAndroid.request(
+          PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
+          {
+            title: 'Permiso de Audio',
+            message: 'Esta aplicación necesita acceso al micrófono para grabar videos de registro facial',
+            buttonNeutral: 'Preguntar después',
+            buttonNegative: 'Cancelar',
+            buttonPositive: 'OK',
+          }
+        );
+        
+        return granted === PermissionsAndroid.RESULTS.GRANTED;
+      } catch (err) {
+        console.warn(err);
+        return false;
+      }
+    }
+    return true; // En iOS se maneja automáticamente por el plugin
+  };
+
+  const startVideoRecording = async () => {
+    if (!cameraRef.current) return;
     
-    // Si falló, intentar una vez más después de un momento
+    // Solicitar permisos de audio antes de grabar
+    const hasAudioPermission = await requestAudioPermission();
     if (!hasAudioPermission) {
-      await new Promise(resolve => setTimeout(resolve, 500));
-      hasAudioPermission = await requestAudioPermission();
-    }
-  } catch (error) {
-    console.log('Error requesting audio permission:', error);
-  }
-  
-  if (!hasAudioPermission) {
-    Alert.alert(
-      'Permiso de Micrófono Requerido',
-      'Para grabar video con instrucciones de voz:\n\n1. Ve a Configuración de tu dispositivo\n2. Aplicaciones → Expo Go\n3. Permisos → Micrófono → Permitir\n4. Vuelve a la app y reintenta\n\nO reinicia la aplicación después de otorgar el permiso.',
-      [
-        { text: 'Ir a Configuración', onPress: () => {
-          setShowCamera(false);
-          setCameraMode(null);
-        }},
-        { text: 'Reintentar', onPress: () => startVideoRecording() }
-      ]
-    );
-    return;
-  }
-  
-  setIsRecording(true);
-
-  try {
-    const video = await cameraRef.current.recordAsync({
-      maxDuration: VIDEO_REGISTRATION_DURATION,
-    });
-
-    if (!video) {
-      throw new Error('No se pudo grabar el video');
-    }
-
-    console.log('Video recorded:', video.uri);
-
-    if (cameraMode === 'register') {
-      await registerFaceWithVideo(video.uri, selectedEmployee);
-    } else if (cameraMode === 'newEmployee') {
-      await createEmployeeWithVideoDirectly(video.uri, newEmployeeName.trim());
-    }
-  } catch (error) {
-  console.error('Error recording video:', error);
-  
-  const errorMessage = error instanceof Error ? error.message : String(error);
-  
-  if (errorMessage.includes('RECORD_AUDIO') || errorMessage.includes('Missing permissions')) {
       Alert.alert(
-        'Error de Permisos',
-        'El permiso de micrófono no está disponible. Reinicia la aplicación después de otorgar permisos en Configuración.',
+        'Permiso Requerido',
+        'Se necesita acceso al micrófono para grabar video. Ve a Configuración → Aplicaciones → Esta App → Permisos → Micrófono',
         [{ text: 'OK' }]
       );
-    } else {
-      Alert.alert('Error', 'No se pudo grabar el video. Intenta nuevamente.');
+      setShowCamera(false);
+      setCameraMode(null);
+      return;
     }
-  } finally {
-    setIsRecording(false);
-    setShowCamera(false);
-  }
-};
+    
+    setIsRecording(true);
+
+    try {
+      const video = await cameraRef.current.recordAsync({
+        maxDuration: VIDEO_REGISTRATION_DURATION,
+      });
+
+      if (!video) {
+        throw new Error('No se pudo grabar el video');
+      }
+
+      console.log('Video recorded:', video.uri);
+
+      if (cameraMode === 'register') {
+        await registerFaceWithVideo(video.uri, selectedEmployee);
+      } else if (cameraMode === 'newEmployee') {
+        await createEmployeeWithVideoDirectly(video.uri, newEmployeeName.trim());
+      }
+    } catch (error) {
+      console.error('Error recording video:', error);
+      Alert.alert('❌ Error', 'No se pudo grabar el video. Intenta nuevamente.');
+    } finally {
+      setIsRecording(false);
+      setShowCamera(false);
+    }
+  };
+
   const stopRecording = () => {
     if (cameraRef.current && isRecording) {
       cameraRef.current.stopRecording();
@@ -449,38 +420,38 @@ export default function App() {
   };
 
   const createEmployeeWithVideoDirectly = async (videoUri: string, employeeName: string) => {
-  setCreatingEmployee(true);
-  const formData = new FormData();
-  formData.append('name', employeeName);
-  formData.append('department', 'General');
-  formData.append('video', {
-    uri: videoUri,
-    name: `new_employee_video.mp4`,
-    type: 'video/mp4',
-  } as any);
+    setCreatingEmployee(true);
+    const formData = new FormData();
+    formData.append('name', employeeName);
+    formData.append('department', 'General');
+    formData.append('video', {
+      uri: videoUri,
+      name: `new_employee_video.mp4`,
+      type: 'video/mp4',
+    } as any);
 
-  try {
-    const response = await fetch(`${API_BASE_URL}/create-employee-with-video/`, {
-      method: 'POST',
-      body: formData,
-    });
+    try {
+      const response = await fetch(`${API_BASE_URL}/create-employee-with-video/`, {
+        method: 'POST',
+        body: formData,
+      });
 
-    const data = await response.json();
-    if (data.success) {
-      await loadEmployees();
-      setNewEmployeeName('');
-      setShowNewEmployeeModal(false);
-      Alert.alert('✅ ¡Creado!', `Empleado ${data.employee.name} creado con reconocimiento facial avanzado por video`);
-    } else {
-      Alert.alert('❌ Error', data.message || 'Error creando empleado con video');
+      const data = await response.json();
+      if (data.success) {
+        await loadEmployees();
+        setNewEmployeeName('');
+        setShowNewEmployeeModal(false);
+        Alert.alert('✅ ¡Creado!', `Empleado ${data.employee.name} creado con reconocimiento facial avanzado por video`);
+      } else {
+        Alert.alert('❌ Error', data.message || 'Error creando empleado con video');
+      }
+    } catch (error) {
+      Alert.alert('❌ Error', 'Error de conexión creando empleado');
+    } finally {
+      setCreatingEmployee(false);
+      setCameraMode(null);
     }
-  } catch (error) {  // ← Cambiar esta línea
-    Alert.alert('❌ Error', 'Error de conexión creando empleado');
-  } finally {
-    setCreatingEmployee(false);
-    setCameraMode(null);
-  }
-};
+  };
 
   const verifyFaceWithTimeout = async (photoData: string, type: 'entrada' | 'salida') => {
     const timestamp = new Date().toISOString();

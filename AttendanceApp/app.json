@@ -17,7 +17,6 @@
       "supportsTablet": true,
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "Esta aplicación necesita acceso a la ubicación para registrar la asistencia con coordenadas GPS exactas",
-        "NSMicrophoneUsageDescription": "Esta aplicación necesita acceso al micrófono para grabar videos de registro facial",
         "NSCameraUsageDescription": "Esta aplicación necesita acceso a la cámara para el reconocimiento facial"
       }
     },
@@ -30,8 +29,7 @@
       "permissions": [
         "android.permission.ACCESS_FINE_LOCATION",
         "android.permission.ACCESS_COARSE_LOCATION",
-        "android.permission.CAMERA",
-        "android.permission.RECORD_AUDIO"
+        "android.permission.CAMERA"
       ]
     },
     "web": {
