@@ -30,7 +30,6 @@ class AttendanceRecordSerializer(serializers.ModelSerializer):
     employee_rut = serializers.CharField(source='employee.rut', read_only=True)
     employee_department = serializers.CharField(source='employee.department', read_only=True)
     formatted_timestamp = serializers.SerializerMethodField()
-    verification_display = serializers.CharField(source='verification_display', read_only=True)
     verification_method_display = serializers.SerializerMethodField()
     
     class Meta:
@@ -39,11 +38,11 @@ class AttendanceRecordSerializer(serializers.ModelSerializer):
             'id', 'employee_name', 'employee_id', 'employee_rut', 'employee_department',
             'attendance_type', 'timestamp', 'formatted_timestamp', 
             'location_lat', 'location_lng', 'address',
-            'verification_method', 'verification_method_display', 'verification_display',
+            'verification_method', 'verification_method_display',
             'face_confidence', 'qr_verified',
             'notes', 'is_offline_sync', 'device_info'
         ]
-        read_only_fields = ['id', 'timestamp', 'verification_display']
+        read_only_fields = ['id', 'timestamp']
     
     def get_formatted_timestamp(self, obj):
         return obj.timestamp.strftime('%d/%m/%Y %H:%M:%S')

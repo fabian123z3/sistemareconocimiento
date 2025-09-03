@@ -32,17 +32,50 @@ ADVANCED_CONFIG = face_recognition_service.ADVANCED_CONFIG
 FACE_IMAGES_DIR = 'media/employee_faces/'
 os.makedirs(FACE_IMAGES_DIR, exist_ok=True)
 
+# --- INICIO: NUEVA FUNCIÓN AUXILIAR ---
+def _create_manual_attendance_record(employee, attendance_type, location_lat, location_lng, address, notes, is_offline_sync, offline_timestamp):
+    """
+    Función auxiliar para crear un registro de asistencia manual.
+    Centraliza la lógica para ser usada por múltiples vistas.
+    """
+    if is_offline_sync and offline_timestamp:
+        try:
+            # Intenta convertir el timestamp ISO del cliente a un objeto de zona horaria consciente
+            record_timestamp = datetime.fromisoformat(offline_timestamp.replace('Z', '+00:00'))
+            if record_timestamp.tzinfo is None:
+                record_timestamp = timezone.make_aware(record_timestamp)
+        except (ValueError, TypeError):
+            record_timestamp = timezone.now()
+    else:
+        record_timestamp = timezone.now()
+    
+    attendance_record = AttendanceRecord.objects.create(
+        employee=employee,
+        attendance_type=attendance_type,
+        timestamp=record_timestamp,
+        location_lat=location_lat,
+        location_lng=location_lng,
+        address=address,
+        verification_method='manual',
+        notes=notes or 'Registro manual/GPS',
+        is_offline_sync=is_offline_sync
+    )
+    return attendance_record
+# --- FIN: NUEVA FUNCIÓN AUXILIAR ---
+
 
 def validate_chilean_rut(rut):
-    """Valida RUT chileno"""
+    """Valida RUT chileno con formato flexible"""
     if not rut:
         return False
     
-    # Limpiar RUT
-    clean_rut = re.sub(r'[^0-9kK]', '', str(rut)).upper()
-    if len(clean_rut) < 2:
+    # Limpiar RUT - solo números y K
+    clean_rut = re.sub(r'[^0-9kK]', '', str(rut).strip()).upper()
+    
+    if len(clean_rut) < 8 or len(clean_rut) > 9:
         return False
     
+    # Separar cuerpo y dígito verificador
     rut_body = clean_rut[:-1]
     dv = clean_rut[-1]
     
@@ -54,16 +87,71 @@ def validate_chilean_rut(rut):
     multiplier = 2
     sum_total = 0
     
+    # Recorrer desde el final hacia el principio
     for digit in reversed(rut_body):
         sum_total += int(digit) * multiplier
-        multiplier = 7 if multiplier == 2 else multiplier + 1
-        if multiplier > 7:
-            multiplier = 2
+        multiplier = multiplier + 1 if multiplier < 7 else 2
     
     remainder = sum_total % 11
-    expected_dv = 'K' if remainder == 10 else str((11 - remainder) % 11)
+    if remainder == 0:
+        expected_dv = '0'
+    elif remainder == 1:
+        expected_dv = 'K'
+    else:
+        expected_dv = str(11 - remainder)
     
     return dv == expected_dv
+
+def format_rut_for_storage(rut):
+    """Formatea RUT para almacenamiento consistente"""
+    if not rut:
+        return rut
+    
+    # Limpiar
+    clean_rut = re.sub(r'[^0-9kK]', '', str(rut).strip()).upper()
+    
+    if len(clean_rut) < 2:
+        return clean_rut
+    
+    # Separar cuerpo y DV
+    rut_body = clean_rut[:-1]
+    dv = clean_rut[-1]
+    
+    # Formatear: 12345678-9
+    return f"{rut_body}-{dv}"
+
+
+def search_employee_by_rut(rut):
+    """Busca empleado por RUT con diferentes formatos"""
+    if not rut:
+        return None
+    
+    # Limpiar RUT para búsqueda
+    clean_rut = re.sub(r'[^0-9kK]', '', str(rut).strip()).upper()
+    
+    if len(clean_rut) < 2:
+        return None
+    
+    rut_body = clean_rut[:-1]
+    dv = clean_rut[-1]
+    formatted_rut = f"{rut_body}-{dv}"
+    
+    try:
+        # Buscar por RUT exacto
+        return Employee.objects.get(rut=formatted_rut, is_active=True)
+    except Employee.DoesNotExist:
+        # Buscar por RUT sin formato
+        try:
+            return Employee.objects.get(rut=clean_rut, is_active=True)
+        except Employee.DoesNotExist:
+            # Búsqueda flexible
+            employees = Employee.objects.filter(is_active=True)
+            for emp in employees:
+                if emp.rut:
+                    emp_clean = re.sub(r'[^0-9kK]', '', emp.rut).upper()
+                    if emp_clean == clean_rut:
+                        return emp
+            return None
 
 
 @api_view(['GET'])
@@ -78,13 +166,14 @@ def health_check(request):
             timestamp__date=timezone.now().date()
         ).count(),
         'system_config': {
-            'mode': 'AVANZADO - Múltiples Variaciones Faciales + QR',
+            'mode': 'AVANZADO - Registro Facial Opcional + QR',
             'photos_required': ADVANCED_CONFIG['min_photos'],
             'tolerance': f"{ADVANCED_CONFIG['base_tolerance']} (adaptativo)",
             'min_confidence': f"{ADVANCED_CONFIG['min_confidence']:.0%}",
             'verification_timeout': f"{ADVANCED_CONFIG['verification_timeout']} segundos",
             'features': [
-                'Registro con 8 fotos (diferentes condiciones)',
+                'Registro básico de empleados (solo nombre y RUT)',
+                'Registro facial opcional con 8 fotos',
                 'Detección robusta con/sin lentes',
                 'Adaptación a cambios de iluminación',
                 'Verificación por código QR + RUT',
@@ -97,8 +186,81 @@ def health_check(request):
 
 
 @api_view(['POST'])
+def create_employee_basic(request):
+    """Crear empleado básico sin registro facial"""
+    try:
+        data = request.data
+        name = data.get('name', '').strip()
+        rut = data.get('rut', '').strip()
+        department = data.get('department', 'General').strip()
+        position = data.get('position', 'Empleado').strip()
+        email = data.get('email', '').strip()
+        
+        if not name or not rut:
+            return Response({
+                'success': False,
+                'message': 'Nombre y RUT son requeridos'
+            }, status=400)
+        
+        # Formatear RUT para almacenamiento
+        formatted_rut = format_rut_for_storage(rut)
+        
+        # Validar RUT
+        if not validate_chilean_rut(formatted_rut):
+            return Response({
+                'success': False,
+                'message': f'RUT inválido: {rut}. Verifica el formato y dígito verificador.'
+            }, status=400)
+        
+        # Verificar RUT único
+        if Employee.objects.filter(rut=formatted_rut).exists():
+            return Response({
+                'success': False,
+                'message': f'Ya existe un empleado con RUT {formatted_rut}'
+            }, status=400)
+        
+        # Generar employee_id único
+        employee_id = f"EMP{str(uuid.uuid4())[:8].upper()}"
+        while Employee.objects.filter(employee_id=employee_id).exists():
+            employee_id = f"EMP{str(uuid.uuid4())[:8].upper()}"
+        
+        if not email:
+            email = f"{employee_id.lower()}@empresa.com"
+        
+        # Crear empleado sin registro facial
+        employee = Employee.objects.create(
+            employee_id=employee_id,
+            name=name,
+            rut=formatted_rut,
+            email=email,
+            department=department,
+            position=position,
+            is_active=True,
+            has_face_registered=False,
+            face_quality_score=0,
+            face_variations_count=0
+        )
+        
+        serializer = EmployeeSerializer(employee)
+        
+        return Response({
+            'success': True,
+            'message': f'Empleado {name} creado exitosamente',
+            'employee': serializer.data,
+            'face_registered': False,
+            'next_step': 'Puedes registrar su rostro posteriormente'
+        })
+        
+    except Exception as e:
+        return Response({
+            'success': False,
+            'message': f'Error: {str(e)}'
+        }, status=500)
+
+
+@api_view(['POST'])
 def create_employee(request):
-    """Crear empleado con registro facial avanzado (8 fotos)"""
+    """Crear empleado con registro facial avanzado (8 fotos) - LEGACY"""
     try:
         data = request.data
         name = data.get('name', '').strip()
@@ -114,18 +276,21 @@ def create_employee(request):
                 'message': 'Nombre y RUT son requeridos'
             }, status=400)
         
+        # Formatear RUT para almacenamiento
+        formatted_rut = format_rut_for_storage(rut)
+        
         # Validar RUT
-        if not validate_chilean_rut(rut):
+        if not validate_chilean_rut(formatted_rut):
             return Response({
                 'success': False,
-                'message': 'RUT inválido. Verifica el formato y dígito verificador.'
+                'message': f'RUT inválido: {rut}. Verifica el formato y dígito verificador.'
             }, status=400)
         
         # Verificar RUT único
-        if Employee.objects.filter(rut=rut).exists():
+        if Employee.objects.filter(rut=formatted_rut).exists():
             return Response({
                 'success': False,
-                'message': 'Ya existe un empleado con este RUT'
+                'message': f'Ya existe un empleado con RUT {formatted_rut}'
             }, status=400)
         
         if len(photos) < ADVANCED_CONFIG['min_photos']:
@@ -160,7 +325,7 @@ def create_employee(request):
         employee = Employee.objects.create(
             employee_id=employee_id,
             name=name,
-            rut=rut,
+            rut=formatted_rut,
             email=email,
             department=department,
             position=position,
@@ -170,7 +335,7 @@ def create_employee(request):
                 **face_data,
                 'registration_date': datetime.now().isoformat(),
                 'system_version': 'ADVANCED_v3.0',
-                'rut': rut
+                'rut': formatted_rut
             }),
             face_registration_date=timezone.now(),
             face_quality_score=face_data.get('average_quality', 0.8),
@@ -448,40 +613,58 @@ def verify_qr(request):
         
         print(f"\n🆔 Verificando QR: {qr_data}")
         
-        # Extraer RUT del código QR (asumiendo que el QR contiene el RUT)
-        # El QR puede contener solo el RUT o datos estructurados
+        # Extraer RUT del código QR con múltiples estrategias
         rut_from_qr = None
         
-        try:
-            # Intentar como JSON
-            qr_json = json.loads(qr_data)
-            rut_from_qr = qr_json.get('rut') or qr_json.get('RUT')
-        except:
-            # Asumir que el QR contiene directamente el RUT
-            rut_from_qr = qr_data
+        # Estrategia 1: Buscar patrón de RUT en el texto
+        import re
+        rut_pattern = r'(\d{7,8}[-]?[0-9kK])'
+        rut_matches = re.findall(rut_pattern, qr_data, re.IGNORECASE)
+        
+        if rut_matches:
+            rut_from_qr = rut_matches[0]
+            print(f"RUT encontrado por patrón: {rut_from_qr}")
+        else:
+            # Estrategia 2: Intentar como JSON
+            try:
+                qr_json = json.loads(qr_data)
+                rut_from_qr = qr_json.get('rut') or qr_json.get('RUT') or qr_json.get('run') or qr_json.get('RUN')
+            except:
+                # Estrategia 3: Asumir que el QR contiene directamente el RUT
+                # Limpiar caracteres especiales y buscar secuencia válida
+                clean_data = re.sub(r'[^0-9kK-]', '', qr_data).upper()
+                if len(clean_data) >= 8:
+                    rut_from_qr = clean_data
+                else:
+                    # Estrategia 4: Buscar cualquier secuencia de números seguida de dígito
+                    number_pattern = r'(\d{7,8}[0-9kK])'
+                    number_matches = re.findall(number_pattern, qr_data, re.IGNORECASE)
+                    if number_matches:
+                        rut_from_qr = number_matches[0]
         
         if not rut_from_qr:
             return Response({
                 'success': False,
-                'message': 'No se pudo extraer RUT del código QR'
+                'message': f'No se pudo extraer RUT del código QR. Contenido: {qr_data[:50]}...'
             }, status=400)
         
-        # Limpiar y validar RUT
-        clean_rut = re.sub(r'[^0-9kK.-]', '', str(rut_from_qr)).upper()
+        # Formatear RUT para búsqueda
+        formatted_rut = format_rut_for_storage(rut_from_qr)
+        print(f"RUT formateado: {formatted_rut}")
         
-        if not validate_chilean_rut(clean_rut):
+        # Validar RUT
+        if not validate_chilean_rut(formatted_rut):
             return Response({
                 'success': False,
-                'message': 'RUT del código QR no es válido'
+                'message': f'RUT extraído del QR no es válido: {formatted_rut}'
             }, status=400)
         
         # Buscar empleado por RUT (búsqueda flexible)
-        try:
-            employee = Employee.objects.get(rut__iexact=clean_rut, is_active=True)
-        except Employee.DoesNotExist:
+        employee = search_employee_by_rut(formatted_rut)
+        if not employee:
             return Response({
                 'success': False,
-                'message': f'Empleado con RUT {clean_rut} no encontrado o inactivo'
+                'message': f'Empleado con RUT {formatted_rut} no encontrado en el sistema'
             }, status=404)
         
         # Crear registro de asistencia
@@ -494,7 +677,7 @@ def verify_qr(request):
             address=address,
             verification_method='qr',
             qr_verified=True,
-            notes=f'Verificación QR exitosa - RUT: {clean_rut}'
+            notes=f'Verificación QR exitosa - RUT: {formatted_rut}'
         )
         
         serializer = AttendanceRecordSerializer(attendance_record)
@@ -511,7 +694,8 @@ def verify_qr(request):
             },
             'verification': {
                 'method': 'QR_CODE_VERIFIED',
-                'rut_verified': clean_rut,
+                'rut_verified': formatted_rut,
+                'qr_content': qr_data[:100],
                 'security_level': 'ALTO'
             },
             'record': serializer.data,
@@ -525,37 +709,22 @@ def verify_qr(request):
             'error_type': 'QR_VERIFICATION_ERROR'
         }, status=500)
 
-
+# --- INICIO: VISTA REFACTORIZADA ---
 @api_view(['POST'])
 def mark_attendance(request):
     """Marcar asistencia manual o procesar verificación"""
     try:
         data = request.data
         
-        # Si viene foto, usar verificación facial
         if data.get('photo'):
             return verify_attendance_face(request)
         
-        # Si viene QR, usar verificación QR
         if data.get('qr_data'):
             return verify_qr(request)
         
-        # Marcado manual
+        # Lógica de búsqueda de empleado
         employee_name = data.get('employee_name', '').strip()
         employee_id = data.get('employee_id', '').strip()
-        attendance_type = data.get('type', 'entrada').lower()
-        location_lat = data.get('latitude')
-        location_lng = data.get('longitude')
-        address = data.get('address', '')
-        notes = data.get('notes', '')
-        is_offline_sync = data.get('is_offline_sync', False)
-        offline_timestamp = data.get('offline_timestamp')
-        
-        if not employee_name and not employee_id:
-            return Response({
-                'success': False,
-                'message': 'Se requiere nombre o ID del empleado'
-            }, status=400)
         
         employee = None
         if employee_id:
@@ -572,44 +741,32 @@ def mark_attendance(request):
             except Employee.MultipleObjectsReturned:
                 return Response({
                     'success': False,
-                    'message': f'Múltiples empleados encontrados con ese nombre'
+                    'message': 'Múltiples empleados encontrados con ese nombre. Por favor, especifique el ID.'
                 }, status=400)
         
         if not employee:
             return Response({
                 'success': False,
-                'message': f'Empleado no encontrado'
-            }, status=404)
+                'message': 'Se requiere nombre o ID del empleado'
+            }, status=400)
         
-        if is_offline_sync and offline_timestamp:
-            try:
-                record_timestamp = datetime.fromisoformat(
-                    offline_timestamp.replace('Z', '+00:00')
-                )
-                if record_timestamp.tzinfo is None:
-                    record_timestamp = timezone.make_aware(record_timestamp)
-            except:
-                record_timestamp = timezone.now()
-        else:
-            record_timestamp = timezone.now()
-        
-        attendance_record = AttendanceRecord.objects.create(
+        # Llamada a la función auxiliar
+        attendance_record = _create_manual_attendance_record(
             employee=employee,
-            attendance_type=attendance_type,
-            timestamp=record_timestamp,
-            location_lat=location_lat,
-            location_lng=location_lng,
-            address=address,
-            verification_method='manual',
-            notes=notes or 'Registro manual/GPS',
-            is_offline_sync=is_offline_sync
+            attendance_type=data.get('type', 'entrada').lower(),
+            location_lat=data.get('latitude'),
+            location_lng=data.get('longitude'),
+            address=data.get('address', ''),
+            notes=data.get('notes', ''),
+            is_offline_sync=data.get('is_offline_sync', False),
+            offline_timestamp=data.get('offline_timestamp')
         )
         
         serializer = AttendanceRecordSerializer(attendance_record)
         
         return Response({
             'success': True,
-            'message': f'✅ {attendance_type.upper()} registrada manualmente',
+            'message': f'✅ {attendance_record.attendance_type.upper()} registrada manualmente',
             'record': serializer.data,
             'employee': {
                 'id': str(employee.id),
@@ -622,14 +779,11 @@ def mark_attendance(request):
         })
         
     except Exception as e:
-        return Response({
-            'success': False,
-            'message': f'Error: {str(e)}'
-        }, status=500)
+        return Response({'success': False, 'message': f'Error: {str(e)}'}, status=500)
+# --- FIN: VISTA REFACTORIZADA ---
 
 
-# [El resto de las funciones continúan igual: sync_offline_records, get_employees, get_attendance_records, delete_employee, delete_attendance, attendance_panel]
-
+# --- INICIO: VISTA DE SINCRONIZACIÓN REFACTORIZADA ---
 @api_view(['POST'])
 def sync_offline_records(request):
     """Sincronizar registros offline"""
@@ -637,64 +791,84 @@ def sync_offline_records(request):
         offline_records = request.data.get('offline_records', [])
         synced_count = 0
         errors = []
+
+        print(f"🔄 Iniciando sincronización de {len(offline_records)} registros offline...")
         
         for record_data in offline_records:
             try:
-                if record_data.get('photo'):
-                    mock_request = HttpRequest()
-                    mock_request.method = 'POST'
-                    mock_request.data = {
-                        'photo': record_data['photo'],
-                        'type': record_data.get('type', 'entrada'),
-                        'latitude': record_data.get('latitude'),
-                        'longitude': record_data.get('longitude'),
-                        'address': record_data.get('address', ''),
-                        'is_offline_sync': True,
-                        'offline_timestamp': record_data.get('timestamp')
-                    }
-                    response = verify_attendance_face(mock_request)
-                elif record_data.get('qr_data'):
-                    mock_request = HttpRequest()
-                    mock_request.method = 'POST'
-                    mock_request.data = {
-                        'qr_data': record_data['qr_data'],
-                        'type': record_data.get('type', 'entrada'),
-                        'latitude': record_data.get('latitude'),
-                        'longitude': record_data.get('longitude'),
-                        'address': record_data.get('address', ''),
-                        'is_offline_sync': True,
-                        'offline_timestamp': record_data.get('timestamp')
-                    }
-                    response = verify_qr(mock_request)
-                else:
-                    mock_request = HttpRequest()
-                    mock_request.method = 'POST'
-                    mock_request.data = {
-                        'employee_name': record_data.get('employee_name'),
-                        'employee_id': record_data.get('employee_id'),
-                        'type': record_data.get('type'),
-                        'latitude': record_data.get('latitude'),
-                        'longitude': record_data.get('longitude'),
-                        'address': record_data.get('address', ''),
-                        'notes': 'Sincronizado offline',
-                        'is_offline_sync': True,
-                        'offline_timestamp': record_data.get('timestamp')
-                    }
-                    response = mark_attendance(mock_request)
+                response = None # Para manejar la respuesta de los métodos no refactorizados
                 
-                if response.status_code in [200, 201]:
-                    synced_count += 1
-                else:
-                    errors.append({
-                        'local_id': record_data.get('local_id'),
-                        'error': response.data.get('message')
-                    })
+                if record_data.get('photo'):
+                    print(f"   Procesando registro facial...")
+                    mock_request = HttpRequest()
+                    mock_request.method = 'POST'
+                    mock_request._body = json.dumps(record_data).encode('utf-8')
+                    mock_request.content_type = 'application/json'
+                    response = verify_attendance_face(mock_request)
+
+                elif record_data.get('qr_data'):
+                    print(f"   Procesando registro QR...")
+                    mock_request = HttpRequest()
+                    mock_request.method = 'POST'
+                    mock_request._body = json.dumps(record_data).encode('utf-8')
+                    mock_request.content_type = 'application/json'
+                    response = verify_qr(mock_request)
+                
+                else: # Lógica corregida para registros manuales
+                    employee_id = record_data.get('employee_id')
+                    employee_name = record_data.get('employee_name')
                     
+                    employee_obj = None
+                    if employee_id:
+                        try:
+                            employee_obj = Employee.objects.get(employee_id=employee_id, is_active=True)
+                        except Employee.DoesNotExist:
+                            pass
+                    
+                    if not employee_obj and employee_name:
+                        try:
+                            employee_obj = Employee.objects.get(name__icontains=employee_name, is_active=True)
+                        except (Employee.DoesNotExist, Employee.MultipleObjectsReturned):
+                            pass
+                            
+                    if not employee_obj:
+                        error_msg = 'Empleado no encontrado para la sincronización'
+                        errors.append({'local_id': record_data.get('local_id'), 'error': error_msg, 'data': record_data})
+                        print(f"   ❌ Fallo al sincronizar: {error_msg} para ID/nombre {employee_id}/{employee_name}")
+                        continue
+                    
+                    print(f"   Procesando registro manual de {employee_obj.name}...")
+                    
+                    # Llamada directa a la función auxiliar
+                    _create_manual_attendance_record(
+                        employee=employee_obj,
+                        attendance_type=record_data.get('type', 'entrada'),
+                        location_lat=record_data.get('latitude'),
+                        location_lng=record_data.get('longitude'),
+                        address=record_data.get('address', ''),
+                        notes='Sincronizado offline',
+                        is_offline_sync=True,
+                        offline_timestamp=record_data.get('timestamp')
+                    )
+                    # Si la función anterior no lanza una excepción, fue exitosa
+                    synced_count += 1
+                    print(f"   ✅ Sincronizado exitosamente.")
+
+                # Procesar la respuesta para los métodos de foto y QR
+                if response:
+                    if response.status_code in [200, 201]:
+                        synced_count += 1
+                        print(f"   ✅ Sincronizado exitosamente.")
+                    else:
+                        error_msg = response.data.get('message', 'Error desconocido')
+                        errors.append({'local_id': record_data.get('local_id'), 'error': error_msg})
+                        print(f"   ❌ Fallo al sincronizar: {error_msg}")
+
             except Exception as e:
-                errors.append({
-                    'local_id': record_data.get('local_id', 'unknown'),
-                    'error': str(e)
-                })
+                errors.append({'local_id': record_data.get('local_id', 'unknown'), 'error': f'Excepción: {str(e)}'})
+                print(f"   ❌ Error al procesar registro: {str(e)}")
+        
+        print(f"🏁 Sincronización finalizada. Total: {synced_count}/{len(offline_records)} exitosos.")
         
         return Response({
             'success': True,
@@ -705,10 +879,8 @@ def sync_offline_records(request):
         })
         
     except Exception as e:
-        return Response({
-            'success': False,
-            'message': f'Error: {str(e)}'
-        }, status=500)
+        return Response({'success': False, 'message': f'Error crítico en la sincronización: {str(e)}'}, status=500)
+# --- FIN: VISTA DE SINCRONIZACIÓN REFACTORIZADA ---
 
 
 @api_view(['GET'])
@@ -722,9 +894,10 @@ def get_employees(request):
             'success': True,
             'employees': serializer.data,
             'count': employees.count(),
-            'system_mode': 'AVANZADO_CON_QR',
+            'system_mode': 'REGISTRO_FACIAL_OPCIONAL',
             'features': {
-                'facial_recognition': True,
+                'basic_registration': True,
+                'optional_facial_recognition': True,
                 'qr_verification': True,
                 'offline_sync': True,
                 'advanced_variations': True
@@ -768,7 +941,7 @@ def get_attendance_records(request):
             'count': len(serializer.data),
             'total': total_count,
             'system_info': {
-                'advanced_recognition': True,
+                'optional_face_registration': True,
                 'qr_support': True,
                 'timeout_seconds': ADVANCED_CONFIG['verification_timeout']
             }
@@ -788,7 +961,7 @@ def delete_employee(request, employee_id):
         employee = Employee.objects.get(id=employee_id)
         employee_name = employee.name
         
-        # Eliminar fotos guardadas
+        # Eliminar fotos guardadas si existen
         for i in range(1, ADVANCED_CONFIG['min_photos'] + 1):
             path = os.path.join(FACE_IMAGES_DIR, f"{employee_id}_variation_{i}.jpg")
             if os.path.exists(path):

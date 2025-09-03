@@ -7,6 +7,7 @@ urlpatterns = [
     
     # Gestión de empleados
     path('employees/', views.get_employees, name='get_employees'),
+    path('create-employee-basic/', views.create_employee_basic, name='create_employee_basic'),
     path('create-employee/', views.create_employee, name='create_employee'),
     path('delete-employee/<uuid:employee_id>/', views.delete_employee, name='delete_employee'),
     
