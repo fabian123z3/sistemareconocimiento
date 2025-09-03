@@ -17,13 +17,13 @@ class AdvancedFaceRecognitionService:
     def __init__(self):
         self.ADVANCED_CONFIG = {
             'min_photos': 8,
-            'base_tolerance': 0.55, # Valor más estricto
+            'base_tolerance': 0.50, # Valor más estricto
             'adaptive_tolerance': True,
-            'min_confidence': 0.60, # Umbral de confianza más seguro
+            'min_confidence': 0.75, # Umbral de confianza más seguro
             'min_matches': 1,
             'use_landmarks': True,
             'use_environmental_adaptation': True,
-            'max_tolerance': 0.75,
+            'max_tolerance': 0.76,
             'verification_timeout': 15,
             'strict_mode': False,
             'min_face_size': 40,
