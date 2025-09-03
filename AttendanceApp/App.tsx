@@ -11,7 +11,6 @@ import {
   ActivityIndicator,
   SafeAreaView,
   RefreshControl,
-  Platform,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -20,16 +19,17 @@ import * as Location from 'expo-location';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as Brightness from 'expo-brightness';
 import * as ImageManipulator from 'expo-image-manipulator';
-import { PermissionsAndroid } from 'react-native/Libraries/PermissionsAndroid/PermissionsAndroid';
+import { BarCodeScanner } from 'expo-barcode-scanner';
 
 const API_BASE_URL = 'http://192.168.96.36:8000/api';
-const VIDEO_REGISTRATION_DURATION = 15;
+const PHOTOS_FOR_REGISTRATION = 8;
 const VERIFICATION_TIMEOUT = 5;
 
 interface Employee {
   id: string;
   name: string;
   employee_id: string;
+  rut: string;
   department: string;
   position: string;
   has_face_registered?: boolean;
@@ -62,34 +62,39 @@ export default function App() {
   const [permission, requestPermission] = useCameraPermissions();
   const [showCamera, setShowCamera] = useState(false);
   const [facing, setFacing] = useState<'front' | 'back'>('front');
-  const [cameraMode, setCameraMode] = useState<'register' | 'verify' | 'newEmployee' | null>(null);
+  const [cameraMode, setCameraMode] = useState<'register' | 'verify' | 'newEmployee' | 'qr' | null>(null);
   const [pendingType, setPendingType] = useState<'entrada' | 'salida'>('entrada');
   const [flashMode, setFlashMode] = useState<'auto' | 'on' | 'off'>('auto');
   const [enableTorch, setEnableTorch] = useState(false);
   const cameraRef = useRef<CameraView>(null);
 
-  // Video Recording States
-  const [isRecording, setIsRecording] = useState(false);
-  const [recordTimer, setRecordTimer] = useState(VIDEO_REGISTRATION_DURATION);
-  const recordIntervalRef = useRef<NodeJS.Timeout | null>(null);
-  const [recordingGuide, setRecordingGuide] = useState('');
+  // Photo Registration States
+  const [capturedPhotos, setCapturedPhotos] = useState<string[]>([]);
+  const [currentPhotoIndex, setCurrentPhotoIndex] = useState(0);
   
   // Registration States
   const [showEmployeeModal, setShowEmployeeModal] = useState(false);
   const [showNewEmployeeModal, setShowNewEmployeeModal] = useState(false);
   const [newEmployeeName, setNewEmployeeName] = useState('');
+  const [newEmployeeRut, setNewEmployeeRut] = useState('');
   const [creatingEmployee, setCreatingEmployee] = useState(false);
 
   // Verification States
   const [verificationInProgress, setVerificationInProgress] = useState(false);
   const [timeoutCounter, setTimeoutCounter] = useState(0);
 
-  const videoInstructions = [
-    { time: 1, text: 'Gira lentamente la cabeza a la izquierda' },
-    { time: 5, text: 'Gira lentamente a la derecha' },
-    { time: 9, text: 'Mira al frente y parpadea un par de veces' },
-    { time: 13, text: 'Sonríe y luego mantén una expresión neutral' },
-    { time: 15, text: '¡Listo! Deteniendo grabación...' },
+  // QR Scanner States
+  const [showQRScanner, setShowQRScanner] = useState(false);
+
+  const photoInstructions = [
+    'Mira al frente con expresión neutral',
+    'Sonríe ligeramente',
+    'Gira la cabeza ligeramente a la izquierda',
+    'Gira la cabeza ligeramente a la derecha',
+    'Mira hacia arriba ligeramente',
+    'Mira hacia abajo ligeramente',
+    'Con lentes (si los usas normalmente)',
+    'Sin lentes (si usas lentes, quítatelos)'
   ];
 
   useEffect(() => {
@@ -105,45 +110,6 @@ export default function App() {
       setEnableTorch(false);
     }
   }, [flashMode, facing, showCamera]);
-
-  useEffect(() => {
-    if (isRecording) {
-      setRecordTimer(VIDEO_REGISTRATION_DURATION);
-      setRecordingGuide(videoInstructions[0].text);
-      let nextInstructionTime = videoInstructions[0].time;
-      let instructionIndex = 0;
-
-      recordIntervalRef.current = setInterval(() => {
-        setRecordTimer(prev => {
-          const newTime = prev - 1;
-          if (newTime >= 0) {
-            if (VIDEO_REGISTRATION_DURATION - newTime === nextInstructionTime) {
-                instructionIndex++;
-                if (instructionIndex < videoInstructions.length) {
-                  setRecordingGuide(videoInstructions[instructionIndex].text);
-                  nextInstructionTime = videoInstructions[instructionIndex].time;
-                }
-            }
-          }
-          if (newTime <= 0) {
-            stopRecording();
-            return 0;
-          }
-          return newTime;
-        });
-      }, 1000);
-    } else {
-      if (recordIntervalRef.current) {
-        clearInterval(recordIntervalRef.current);
-        recordIntervalRef.current = null;
-      }
-    }
-    return () => {
-      if (recordIntervalRef.current) {
-        clearInterval(recordIntervalRef.current);
-      }
-    };
-  }, [isRecording]);
 
   const initializeApp = async () => {
     await loadStoredData();
@@ -246,6 +212,47 @@ export default function App() {
     setRefreshing(false);
   };
 
+  const formatRut = (rut: string) => {
+    // Remove any non-alphanumeric characters
+    const clean = rut.replace(/[^0-9kK]/g, '').toLowerCase();
+    
+    if (clean.length > 1) {
+      const body = clean.slice(0, -1);
+      const dv = clean.slice(-1);
+      
+      // Add dots to body
+      const formatted = body.replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+      return `${formatted}-${dv}`;
+    }
+    
+    return clean;
+  };
+
+  const validateRut = (rut: string) => {
+    const clean = rut.replace(/[^0-9kK]/g, '').toLowerCase();
+    
+    if (clean.length < 2) return false;
+    
+    const body = clean.slice(0, -1);
+    const dv = clean.slice(-1);
+    
+    // Validar que el cuerpo sean solo números
+    if (!/^\d+$/.test(body)) return false;
+    
+    let sum = 0;
+    let multiplier = 2;
+    
+    for (let i = body.length - 1; i >= 0; i--) {
+      sum += parseInt(body[i]) * multiplier;
+      multiplier = multiplier === 7 ? 2 : multiplier + 1;
+    }
+    
+    const remainder = sum % 11;
+    const calculatedDv = remainder < 2 ? remainder.toString() : remainder === 10 ? 'k' : (11 - remainder).toString();
+    
+    return dv === calculatedDv;
+  };
+
   const takePicture = async () => {
     if (!cameraRef.current) return;
     
@@ -290,9 +297,28 @@ export default function App() {
       
       const photoData = `data:image/jpeg;base64,${manipulated.base64}`;
 
-      setIsLoading(false); 
-      setShowCamera(false);
-      await verifyFaceWithTimeout(photoData, pendingType);
+      if (cameraMode === 'verify') {
+        setIsLoading(false); 
+        setShowCamera(false);
+        await verifyFaceWithTimeout(photoData, pendingType);
+      } else if (cameraMode === 'register' || cameraMode === 'newEmployee') {
+        const newPhotos = [...capturedPhotos, photoData];
+        setCapturedPhotos(newPhotos);
+        
+        if (newPhotos.length >= PHOTOS_FOR_REGISTRATION) {
+          setIsLoading(false);
+          setShowCamera(false);
+          
+          if (cameraMode === 'register') {
+            await registerFaceWithPhotos(newPhotos, selectedEmployee);
+          } else if (cameraMode === 'newEmployee') {
+            await createEmployeeWithPhotos(newPhotos, newEmployeeName.trim(), newEmployeeRut.trim());
+          }
+        } else {
+          setCurrentPhotoIndex(prev => prev + 1);
+          setIsLoading(false);
+        }
+      }
       
     } catch (error) {
       console.error('Error capturando foto:', error);
@@ -305,98 +331,22 @@ export default function App() {
     }
   };
 
-  // Función para solicitar permisos de audio en Android
-  const requestAudioPermission = async () => {
-    if (Platform.OS === 'android') {
-      try {
-        const granted = await PermissionsAndroid.request(
-          PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
-          {
-            title: 'Permiso de Audio',
-            message: 'Esta aplicación necesita acceso al micrófono para grabar videos de registro facial',
-            buttonNeutral: 'Preguntar después',
-            buttonNegative: 'Cancelar',
-            buttonPositive: 'OK',
-          }
-        );
-        
-        return granted === PermissionsAndroid.RESULTS.GRANTED;
-      } catch (err) {
-        console.warn(err);
-        return false;
-      }
-    }
-    return true; // En iOS se maneja automáticamente por el plugin
-  };
-
-  const startVideoRecording = async () => {
-    if (!cameraRef.current) return;
-    
-    // Solicitar permisos de audio antes de grabar
-    const hasAudioPermission = await requestAudioPermission();
-    if (!hasAudioPermission) {
-      Alert.alert(
-        'Permiso Requerido',
-        'Se necesita acceso al micrófono para grabar video. Ve a Configuración → Aplicaciones → Esta App → Permisos → Micrófono',
-        [{ text: 'OK' }]
-      );
-      setShowCamera(false);
-      setCameraMode(null);
-      return;
-    }
-    
-    setIsRecording(true);
-
-    try {
-      const video = await cameraRef.current.recordAsync({
-        maxDuration: VIDEO_REGISTRATION_DURATION,
-      });
-
-      if (!video) {
-        throw new Error('No se pudo grabar el video');
-      }
-
-      console.log('Video recorded:', video.uri);
-
-      if (cameraMode === 'register') {
-        await registerFaceWithVideo(video.uri, selectedEmployee);
-      } else if (cameraMode === 'newEmployee') {
-        await createEmployeeWithVideoDirectly(video.uri, newEmployeeName.trim());
-      }
-    } catch (error) {
-      console.error('Error recording video:', error);
-      Alert.alert('❌ Error', 'No se pudo grabar el video. Intenta nuevamente.');
-    } finally {
-      setIsRecording(false);
-      setShowCamera(false);
-    }
-  };
-
-  const stopRecording = () => {
-    if (cameraRef.current && isRecording) {
-      cameraRef.current.stopRecording();
-      setIsRecording(false);
-    }
-  };
-
-  const registerFaceWithVideo = async (videoUri: string, employee: Employee | null) => {
+  const registerFaceWithPhotos = async (photos: string[], employee: Employee | null) => {
     if (!employee) {
       Alert.alert('❌ Error', 'Empleado no seleccionado');
       return;
     }
+    
     setIsLoading(true);
-    const formData = new FormData();
-    formData.append('employee_id', employee.id);
-    formData.append('video', {
-      uri: videoUri,
-      name: `registration_video_${employee.id}.mp4`,
-      type: 'video/mp4',
-    } as any);
-
+    
     try {
-      const response = await fetch(`${API_BASE_URL}/register-face-video/`, {
+      const response = await fetch(`${API_BASE_URL}/register-face/`, {
         method: 'POST',
-        body: formData,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          employee_id: employee.id,
+          photos: photos
+        })
       });
 
       const data = await response.json();
@@ -407,49 +357,52 @@ export default function App() {
             : emp
         ));
         setSelectedEmployee({ ...employee, has_face_registered: true });
-        Alert.alert('✅ ¡Registrado!', `Rostro de ${employee.name} registrado con éxito por video`);
+        Alert.alert('✅ ¡Registrado!', `Rostro de ${employee.name} registrado con ${data.photos_processed} fotos válidas`);
       } else {
-        Alert.alert('❌ Error', data.message || 'Error registrando rostro por video');
+        Alert.alert('❌ Error', data.message || 'Error registrando rostro');
       }
     } catch (error) {
-      Alert.alert('❌ Error', 'Error de conexión registrando rostro por video');
+      Alert.alert('❌ Error', 'Error de conexión registrando rostro');
     } finally {
       setIsLoading(false);
       setCameraMode(null);
+      setCapturedPhotos([]);
+      setCurrentPhotoIndex(0);
     }
   };
 
-  const createEmployeeWithVideoDirectly = async (videoUri: string, employeeName: string) => {
+  const createEmployeeWithPhotos = async (photos: string[], employeeName: string, employeeRut: string) => {
     setCreatingEmployee(true);
-    const formData = new FormData();
-    formData.append('name', employeeName);
-    formData.append('department', 'General');
-    formData.append('video', {
-      uri: videoUri,
-      name: `new_employee_video.mp4`,
-      type: 'video/mp4',
-    } as any);
-
+    
     try {
-      const response = await fetch(`${API_BASE_URL}/create-employee-with-video/`, {
+      const response = await fetch(`${API_BASE_URL}/create-employee/`, {
         method: 'POST',
-        body: formData,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: employeeName,
+          rut: employeeRut,
+          department: 'General',
+          photos: photos
+        })
       });
 
       const data = await response.json();
       if (data.success) {
         await loadEmployees();
         setNewEmployeeName('');
+        setNewEmployeeRut('');
         setShowNewEmployeeModal(false);
-        Alert.alert('✅ ¡Creado!', `Empleado ${data.employee.name} creado con reconocimiento facial avanzado por video`);
+        Alert.alert('✅ ¡Creado!', `Empleado ${data.employee.name} creado con reconocimiento facial avanzado`);
       } else {
-        Alert.alert('❌ Error', data.message || 'Error creando empleado con video');
+        Alert.alert('❌ Error', data.message || 'Error creando empleado');
       }
     } catch (error) {
       Alert.alert('❌ Error', 'Error de conexión creando empleado');
     } finally {
       setCreatingEmployee(false);
       setCameraMode(null);
+      setCapturedPhotos([]);
+      setCurrentPhotoIndex(0);
     }
   };
 
@@ -623,6 +576,69 @@ export default function App() {
     }
   };
 
+  const markAttendanceQR = async (type: 'entrada' | 'salida') => {
+    setCameraMode('qr');
+    setPendingType(type);
+    setShowCamera(true);
+  };
+
+  const handleQRCodeScanned = async ({ data }: { data: string }) => {
+    if (!isOnline) {
+      Alert.alert('❌ Error', 'Se requiere conexión a internet para verificar código QR');
+      setShowCamera(false);
+      return;
+    }
+
+    setIsLoading(true);
+    
+    try {
+      const response = await fetch(`${API_BASE_URL}/verify-qr/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          qr_data: data,
+          type: pendingType,
+          latitude: coordinates?.lat,
+          longitude: coordinates?.lng,
+          address: currentLocation
+        })
+      });
+      
+      const result = await response.json();
+      
+      if (result.success) {
+        const newRecord: AttendanceRecord = {
+          id: result.record.id,
+          employee_name: result.employee.name,
+          attendance_type: pendingType,
+          timestamp: new Date().toLocaleString('es-CL'),
+          location_lat: coordinates?.lat || 0,
+          location_lng: coordinates?.lng || 0,
+          address: currentLocation,
+          is_offline_sync: false,
+          face_confidence: 0
+        };
+        
+        const updated = [newRecord, ...attendanceHistory].slice(0, 20);
+        setAttendanceHistory(updated);
+        await saveToStorage('attendanceHistory', updated);
+        
+        Alert.alert(
+          '✅ ¡Código QR Verificado!', 
+          `${pendingType.toUpperCase()} - ${result.employee.name}\n🆔 RUT: ${result.employee.rut}`
+        );
+      } else {
+        Alert.alert('❌ QR No Válido', result.message || 'Código QR no reconocido o RUT no coincide');
+      }
+    } catch (error) {
+      Alert.alert('❌ Error', 'Error verificando código QR');
+    } finally {
+      setIsLoading(false);
+      setShowCamera(false);
+      setCameraMode(null);
+    }
+  };
+
   const startRegistration = () => {
     if (!selectedEmployee) {
       Alert.alert('❌ Error', 'Selecciona un empleado primero');
@@ -630,14 +646,16 @@ export default function App() {
     }
     
     Alert.alert(
-      '📸 Registro Facial por Video',
-      `¿Grabar un video de ${VIDEO_REGISTRATION_DURATION} segundos para registrar el rostro de ${selectedEmployee.name}?\n\nDurante la grabación, sigue las instrucciones en pantalla para un reconocimiento más preciso.`,
+      '📸 Registro Facial Avanzado',
+      `¿Tomar ${PHOTOS_FOR_REGISTRATION} fotos para registrar el rostro de ${selectedEmployee.name}?\n\nIncluye fotos con y sin lentes, diferentes expresiones e iluminación para mayor precisión.`,
       [
         { text: '❌ Cancelar', style: 'cancel' },
         { 
-          text: '🎥 Comenzar',
+          text: '📸 Comenzar',
           onPress: () => {
             setCameraMode('register');
+            setCapturedPhotos([]);
+            setCurrentPhotoIndex(0);
             setShowCamera(true);
           }
         }
@@ -646,20 +664,22 @@ export default function App() {
   };
 
   const startNewEmployeeFlow = () => {
-    if (!newEmployeeName.trim()) {
-      Alert.alert('❌ Error', 'Ingresa el nombre del empleado');
+    if (!newEmployeeName.trim() || !newEmployeeRut.trim()) {
+      Alert.alert('❌ Error', 'Ingresa el nombre y RUT del empleado');
       return;
     }
     
     Alert.alert(
       '👤 Nuevo Empleado',
-      `¿Crear empleado "${newEmployeeName}" con un video de ${VIDEO_REGISTRATION_DURATION} segundos?`,
+      `¿Crear empleado "${newEmployeeName}" con RUT ${newEmployeeRut} con ${PHOTOS_FOR_REGISTRATION} fotos?`,
       [
         { text: '❌ Cancelar', style: 'cancel' },
         { 
-          text: '🎥 Crear',
+          text: '📸 Crear',
           onPress: () => {
             setCameraMode('newEmployee');
+            setCapturedPhotos([]);
+            setCurrentPhotoIndex(0);
             setShowCamera(true);
           }
         }
@@ -774,7 +794,7 @@ export default function App() {
         >
           <Text style={styles.label}>👤 Empleado:</Text>
           <Text style={styles.value}>
-            {selectedEmployee ? selectedEmployee.name : 'Seleccionar empleado'}
+            {selectedEmployee ? `${selectedEmployee.name} (${selectedEmployee.rut})` : 'Seleccionar empleado'}
           </Text>
           {selectedEmployee?.has_face_registered && (
             <Text style={styles.registered}>✅ Reconocimiento facial avanzado activo</Text>
@@ -810,7 +830,7 @@ export default function App() {
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>🔍 Reconocimiento Facial Inteligente</Text>
           <Text style={styles.sectionSubtitle}>
-            Detecta rostros con cualquier expresión, lentes, barba o cambios físicos
+            Detecta rostros con cambios físicos: lentes, barba, cortes de pelo, iluminación variable
           </Text>
           <View style={styles.buttonRow}>
             <TouchableOpacity 
@@ -851,13 +871,37 @@ export default function App() {
               disabled={verificationInProgress}
             >
               <Text style={styles.registerText}>
-                🎥 Registrar rostro de {selectedEmployee.name} por video
+                📸 Registrar rostro de {selectedEmployee.name}
               </Text>
               <Text style={styles.registerSubText}>
-                (Sigue las instrucciones en pantalla)
+                ({PHOTOS_FOR_REGISTRATION} fotos con diferentes condiciones)
               </Text>
             </TouchableOpacity>
           )}
+        </View>
+
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>🆔 Marcado por Código QR</Text>
+          <Text style={styles.sectionSubtitle}>
+            Escanea el código QR del carnet para verificar identidad por RUT
+          </Text>
+          <View style={styles.buttonRow}>
+            <TouchableOpacity 
+              style={[styles.button, styles.qr]}
+              onPress={() => markAttendanceQR('entrada')}
+              disabled={isLoading || verificationInProgress || !isOnline}
+            >
+              <Text style={styles.buttonText}>📱 QR ENTRADA</Text>
+            </TouchableOpacity>
+            
+            <TouchableOpacity 
+              style={[styles.button, styles.qr]}
+              onPress={() => markAttendanceQR('salida')}
+              disabled={isLoading || verificationInProgress || !isOnline}
+            >
+              <Text style={styles.buttonText}>📱 QR SALIDA</Text>
+            </TouchableOpacity>
+          </View>
         </View>
 
         {offlineRecords.length > 0 && isOnline && (
@@ -899,93 +943,109 @@ export default function App() {
 
       <Modal visible={showCamera} animationType="slide">
         <View style={styles.cameraContainer}>
-          <CameraView
-            ref={cameraRef}
-            style={styles.camera}
-            facing={facing}
-            enableTorch={enableTorch}
-          >
-            <View style={styles.cameraOverlay}>
-              <TouchableOpacity 
-                style={styles.closeCamera} 
-                onPress={() => {
-                  setShowCamera(false);
-                  setIsRecording(false);
-                  setCameraMode(null);
-                }}
-              >
-                <Text style={styles.closeCameraText}>✕</Text>
-              </TouchableOpacity>
-              
-              {renderFlashButton()}
-
-              {(cameraMode === 'verify' || cameraMode === 'register' || cameraMode === 'newEmployee') && (
-                <>
-                  <View style={styles.faceGuideFrame} />
-                  <View style={styles.faceGuideFrameCorners}>
-                    <View style={styles.cornerTopLeft} />
-                    <View style={styles.cornerTopRight} />
-                    <View style={styles.cornerBottomLeft} />
-                    <View style={styles.cornerBottomRight} />
-                  </View>
-                </>
-              )}
-              
-              {(cameraMode === 'register' || cameraMode === 'newEmployee') && (
-                <View style={styles.cameraInfo}>
-                  <Text style={styles.photoCounter}>
-                    {isRecording ? `Grabando... ${recordTimer}s` : `Video de registro`}
-                  </Text>
-                  <Text style={styles.photoGuide}>
-                    {isRecording 
-                      ? recordingGuide 
-                      : `Graba un video de ${VIDEO_REGISTRATION_DURATION} segundos para registrar tu rostro`}
-                  </Text>
-                </View>
-              )}
-
-              {cameraMode === 'verify' && (
-                <View style={styles.cameraInfo}>
-                  <Text style={styles.verifyTitle}>
-                    🔍 Reconocimiento Inteligente
-                  </Text>
-                  <Text style={styles.verifySubtitle}>
-                    Posiciona tu rostro en el óvalo
-                  </Text>
-                </View>
-              )}
-              
-              <View style={styles.cameraControls}>
+          {cameraMode === 'qr' ? (
+            <BarCodeScanner
+              onBarCodeScanned={handleQRCodeScanned}
+              style={styles.camera}
+            >
+              <View style={styles.cameraOverlay}>
                 <TouchableOpacity 
-                  style={styles.flipButton}
-                  onPress={() => setFacing(facing === 'back' ? 'front' : 'back')}
+                  style={styles.closeCamera} 
+                  onPress={() => {
+                    setShowCamera(false);
+                    setCameraMode(null);
+                  }}
                 >
-                  <Text style={styles.controlText}>🔄</Text>
+                  <Text style={styles.closeCameraText}>✕</Text>
                 </TouchableOpacity>
                 
-                {isRecording ? (
-                  <TouchableOpacity
-                    style={[styles.captureButton, styles.stopButton]}
-                    onPress={stopRecording}
+                <View style={styles.qrFrame} />
+                
+                <View style={styles.cameraInfo}>
+                  <Text style={styles.qrTitle}>
+                    📱 Escanear Código QR
+                  </Text>
+                  <Text style={styles.qrSubtitle}>
+                    Posiciona el código QR del carnet dentro del marco
+                  </Text>
+                </View>
+              </View>
+            </BarCodeScanner>
+          ) : (
+            <CameraView
+              ref={cameraRef}
+              style={styles.camera}
+              facing={facing}
+              enableTorch={enableTorch}
+            >
+              <View style={styles.cameraOverlay}>
+                <TouchableOpacity 
+                  style={styles.closeCamera} 
+                  onPress={() => {
+                    setShowCamera(false);
+                    setCameraMode(null);
+                    setCapturedPhotos([]);
+                    setCurrentPhotoIndex(0);
+                  }}
+                >
+                  <Text style={styles.closeCameraText}>✕</Text>
+                </TouchableOpacity>
+                
+                {renderFlashButton()}
+
+                <View style={styles.faceGuideFrame} />
+                <View style={styles.faceGuideFrameCorners}>
+                  <View style={styles.cornerTopLeft} />
+                  <View style={styles.cornerTopRight} />
+                  <View style={styles.cornerBottomLeft} />
+                  <View style={styles.cornerBottomRight} />
+                </View>
+                
+                {(cameraMode === 'register' || cameraMode === 'newEmployee') && (
+                  <View style={styles.cameraInfo}>
+                    <Text style={styles.photoCounter}>
+                      Foto {currentPhotoIndex + 1} de {PHOTOS_FOR_REGISTRATION}
+                    </Text>
+                    <Text style={styles.photoGuide}>
+                      {photoInstructions[currentPhotoIndex] || 'Posiciona tu rostro en el marco'}
+                    </Text>
+                  </View>
+                )}
+
+                {cameraMode === 'verify' && (
+                  <View style={styles.cameraInfo}>
+                    <Text style={styles.verifyTitle}>
+                      🔍 Reconocimiento Inteligente
+                    </Text>
+                    <Text style={styles.verifySubtitle}>
+                      Posiciona tu rostro en el óvalo y toma la foto
+                    </Text>
+                  </View>
+                )}
+                
+                <View style={styles.cameraControls}>
+                  <TouchableOpacity 
+                    style={styles.flipButton}
+                    onPress={() => setFacing(facing === 'back' ? 'front' : 'back')}
                   >
-                    <Text style={styles.captureText}>■</Text>
+                    <Text style={styles.controlText}>🔄</Text>
                   </TouchableOpacity>
-                ) : (
+                  
                   <TouchableOpacity 
                     style={styles.captureButton} 
-                    onPress={cameraMode === 'verify' ? takePicture : startVideoRecording}
+                    onPress={takePicture}
                     disabled={isLoading}
                   >
                     <Text style={styles.captureText}>
-                      {isLoading ? '⏳' : (cameraMode === 'verify' ? '📸' : '◉')}
+                      {isLoading ? '⏳' : '📸'}
                     </Text>
                   </TouchableOpacity>
-                )}
-                
-                <View style={styles.placeholder} />
+                  
+                  <View style={styles.placeholder} />
+                </View>
               </View>
-            </View>
-          </CameraView>
+            </CameraView>
+          )}
         </View>
       </Modal>
 
@@ -1007,9 +1067,9 @@ export default function App() {
                   >
                     <Text style={styles.employeeName}>
                       {emp.name}
-                      {emp.has_face_registered && ' 🔍'}
+                      {emp.has_face_registered && ' 📸'}
                     </Text>
-                    <Text style={styles.employeeId}>{emp.employee_id}</Text>
+                    <Text style={styles.employeeId}>{emp.employee_id} - {emp.rut}</Text>
                   </TouchableOpacity>
                   
                   <TouchableOpacity onPress={() => deleteEmployee(emp)}>
@@ -1054,15 +1114,26 @@ export default function App() {
               editable={!creatingEmployee}
               placeholderTextColor="#999"
             />
+
+            <TextInput
+              style={styles.input}
+              placeholder="RUT (ej: 12345678-9)"
+              value={formatRut(newEmployeeRut)}
+              onChangeText={(text) => setNewEmployeeRut(text.replace(/[^0-9kK.-]/g, ''))}
+              editable={!creatingEmployee}
+              placeholderTextColor="#999"
+              keyboardType="default"
+              maxLength={12}
+            />
             
             <View style={styles.modalButtons}>
               <TouchableOpacity 
-                style={[styles.modalButton, (!newEmployeeName.trim() || creatingEmployee) && styles.modalButtonDisabled]} 
+                style={[styles.modalButton, (!newEmployeeName.trim() || !newEmployeeRut.trim() || !validateRut(newEmployeeRut) || creatingEmployee) && styles.modalButtonDisabled]} 
                 onPress={startNewEmployeeFlow}
-                disabled={!newEmployeeName.trim() || creatingEmployee}
+                disabled={!newEmployeeName.trim() || !newEmployeeRut.trim() || !validateRut(newEmployeeRut) || creatingEmployee}
               >
                 <Text style={styles.buttonText}>
-                  {creatingEmployee ? '⏳ Creando...' : '◉ Crear por Video'}
+                  {creatingEmployee ? '⏳ Creando...' : '📸 Crear con Fotos'}
                 </Text>
               </TouchableOpacity>
               
@@ -1071,12 +1142,17 @@ export default function App() {
                 onPress={() => {
                   setShowNewEmployeeModal(false);
                   setNewEmployeeName('');
+                  setNewEmployeeRut('');
                 }}
                 disabled={creatingEmployee}
               >
                 <Text style={styles.buttonText}>✕ Cancelar</Text>
               </TouchableOpacity>
             </View>
+            
+            {newEmployeeRut && !validateRut(newEmployeeRut) && (
+              <Text style={styles.errorText}>❌ RUT inválido</Text>
+            )}
           </View>
         </View>
       </Modal>
@@ -1181,6 +1257,9 @@ const styles = StyleSheet.create({
   },
   facial: {
     backgroundColor: '#3498db',
+  },
+  qr: {
+    backgroundColor: '#9b59b6',
   },
   buttonText: {
     color: '#fff',
@@ -1367,6 +1446,25 @@ const styles = StyleSheet.create({
     marginTop: 10,
     textAlign: 'center',
   },
+  qrTitle: {
+    fontSize: 20,
+    color: '#fff',
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 20,
+    fontWeight: 'bold',
+  },
+  qrSubtitle: {
+    fontSize: 12,
+    color: '#fff',
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    paddingHorizontal: 15,
+    paddingVertical: 8,
+    borderRadius: 15,
+    marginTop: 10,
+    textAlign: 'center',
+  },
   cameraControls: {
     position: 'absolute',
     bottom: 50,
@@ -1394,9 +1492,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     borderWidth: 4,
     borderColor: '#fff',
-  },
-  stopButton: {
-    backgroundColor: '#e74c3c',
   },
   captureText: {
     fontSize: 30,
@@ -1488,6 +1583,12 @@ const styles = StyleSheet.create({
   modalButtonDisabled: {
     backgroundColor: '#bdc3c7',
   },
+  errorText: {
+    color: '#e74c3c',
+    fontSize: 12,
+    textAlign: 'center',
+    marginTop: 5,
+  },
   faceGuideFrame: {
     position: 'absolute',
     top: '20%',
@@ -1544,5 +1645,15 @@ const styles = StyleSheet.create({
     borderBottomRightRadius: 10,
     right: 0,
     bottom: 0,
+  },
+  qrFrame: {
+    position: 'absolute',
+    top: '25%',
+    left: '15%',
+    right: '15%',
+    height: '50%',
+    borderColor: '#fff',
+    borderWidth: 3,
+    borderRadius: 15,
   },
 });

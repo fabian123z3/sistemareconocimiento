@@ -10,11 +10,14 @@ urlpatterns = [
     path('create-employee/', views.create_employee, name='create_employee'),
     path('delete-employee/<uuid:employee_id>/', views.delete_employee, name='delete_employee'),
     
-    # Reconocimiento facial (procesado en servidor)
+    # Reconocimiento facial avanzado
     path('register-face/', views.register_employee_face, name='register_employee_face'),
     path('verify-face/', views.verify_attendance_face, name='verify_attendance_face'),
     
-    # Marcado de asistencia (compatible con ambos métodos)
+    # Verificación por código QR
+    path('verify-qr/', views.verify_qr, name='verify_qr'),
+    
+    # Marcado de asistencia (compatible con todos los métodos)
     path('mark-attendance/', views.mark_attendance, name='mark_attendance'),
     
     # Sincronización offline
@@ -26,8 +29,4 @@ urlpatterns = [
     
     # Panel web
     path('panel/', views.attendance_panel, name='attendance_panel'),
-
-    # Nuevas rutas para video
-    path('register-face-video/', views.register_face_video, name='register-face-video'),
-    path('create-employee-with-video/', views.create_employee_with_video, name='create-employee-with-video'),
 ]
