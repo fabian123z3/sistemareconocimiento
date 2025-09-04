@@ -12,7 +12,13 @@ node_modules/
 __pycache__/
 .DS_Store
 Thumbs.db
-
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+Lib/
+Scripts/
+Include/
+pyvenv.cfg
 # ========== DJANGO BACKEND ==========
 # Base de datos
 attendance-system/attendance_backend/db.sqlite3
