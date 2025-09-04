@@ -32,7 +32,6 @@ ADVANCED_CONFIG = face_recognition_service.ADVANCED_CONFIG
 FACE_IMAGES_DIR = 'media/employee_faces/'
 os.makedirs(FACE_IMAGES_DIR, exist_ok=True)
 
-# --- INICIO: NUEVA FUNCIÓN AUXILIAR ---
 def _create_manual_attendance_record(employee, attendance_type, location_lat, location_lng, address, notes, is_offline_sync, offline_timestamp):
     """
     Función auxiliar para crear un registro de asistencia manual.
@@ -61,33 +60,26 @@ def _create_manual_attendance_record(employee, attendance_type, location_lat, lo
         is_offline_sync=is_offline_sync
     )
     return attendance_record
-# --- FIN: NUEVA FUNCIÓN AUXILIAR ---
-
 
 def validate_chilean_rut(rut):
     """Valida RUT chileno con formato flexible"""
     if not rut:
         return False
     
-    # Limpiar RUT - solo números y K
     clean_rut = re.sub(r'[^0-9kK]', '', str(rut).strip()).upper()
     
     if len(clean_rut) < 8 or len(clean_rut) > 9:
         return False
     
-    # Separar cuerpo y dígito verificador
     rut_body = clean_rut[:-1]
     dv = clean_rut[-1]
     
-    # Validar que el cuerpo sean solo números
     if not rut_body.isdigit():
         return False
     
-    # Calcular dígito verificador
     multiplier = 2
     sum_total = 0
     
-    # Recorrer desde el final hacia el principio
     for digit in reversed(rut_body):
         sum_total += int(digit) * multiplier
         multiplier = multiplier + 1 if multiplier < 7 else 2
@@ -107,26 +99,21 @@ def format_rut_for_storage(rut):
     if not rut:
         return rut
     
-    # Limpiar
     clean_rut = re.sub(r'[^0-9kK]', '', str(rut).strip()).upper()
     
     if len(clean_rut) < 2:
         return clean_rut
     
-    # Separar cuerpo y DV
     rut_body = clean_rut[:-1]
     dv = clean_rut[-1]
     
-    # Formatear: 12345678-9
     return f"{rut_body}-{dv}"
-
 
 def search_employee_by_rut(rut):
     """Busca empleado por RUT con diferentes formatos"""
     if not rut:
         return None
     
-    # Limpiar RUT para búsqueda
     clean_rut = re.sub(r'[^0-9kK]', '', str(rut).strip()).upper()
     
     if len(clean_rut) < 2:
@@ -137,14 +124,11 @@ def search_employee_by_rut(rut):
     formatted_rut = f"{rut_body}-{dv}"
     
     try:
-        # Buscar por RUT exacto
         return Employee.objects.get(rut=formatted_rut, is_active=True)
     except Employee.DoesNotExist:
-        # Buscar por RUT sin formato
         try:
             return Employee.objects.get(rut=clean_rut, is_active=True)
         except Employee.DoesNotExist:
-            # Búsqueda flexible
             employees = Employee.objects.filter(is_active=True)
             for emp in employees:
                 if emp.rut:
@@ -153,37 +137,43 @@ def search_employee_by_rut(rut):
                         return emp
             return None
 
-
 @api_view(['GET'])
 def health_check(request):
-    """Estado del sistema inteligente avanzado"""
+    """Estado del sistema balanceado"""
     return Response({
         'status': 'OK',
-        'message': 'Sistema de Reconocimiento Facial Avanzado con QR',
+        'message': 'Sistema de Reconocimiento Facial Balanceado - 5 Fotos',
         'timestamp': datetime.now().isoformat(),
         'employees_count': Employee.objects.filter(is_active=True).count(),
+        'employees_with_faces': Employee.objects.filter(is_active=True, has_face_registered=True).count(),
         'attendance_today': AttendanceRecord.objects.filter(
             timestamp__date=timezone.now().date()
         ).count(),
         'system_config': {
-            'mode': 'AVANZADO - Registro Facial Opcional + QR',
-            'photos_required': ADVANCED_CONFIG['min_photos'],
-            'tolerance': f"{ADVANCED_CONFIG['base_tolerance']} (adaptativo)",
-            'min_confidence': f"{ADVANCED_CONFIG['min_confidence']:.0%}",
-            'verification_timeout': f"{ADVANCED_CONFIG['verification_timeout']} segundos",
+            'mode': 'BALANCEADO - Registro Facial de 5 Fotos',
+            'photos_required': ADVANCED_CONFIG['min_photos'],  # 5 fotos
+            'tolerance': f"{ADVANCED_CONFIG['base_tolerance']} (balanceado)",
+            'min_confidence': f"{ADVANCED_CONFIG['min_confidence']:.0%}",  # 75%
+            'verification_timeout': f"{ADVANCED_CONFIG['verification_timeout']} segundos",  # 12s
             'features': [
                 'Registro básico de empleados (solo nombre y RUT)',
-                'Registro facial opcional con 8 fotos',
-                'Detección robusta con/sin lentes',
-                'Adaptación a cambios de iluminación',
+                'Registro facial optimizado con 5 fotos',
+                'Detección balanceada para condiciones reales',
+                'Tolerancia mejorada a variaciones de iluminación',
                 'Verificación por código QR + RUT',
-                'Análisis multi-escala de características',
-                'Timeout inteligente de verificación',
-                'Sincronización offline'
+                'Procesamiento más rápido y eficiente',
+                'Timeout inteligente reducido',
+                'Sincronización offline optimizada'
+            ],
+            'improvements': [
+                'Solo 5 fotos necesarias (era 8)',
+                'Verificación más rápida (12s vs 15s)',
+                'Mayor tolerancia a condiciones de luz',
+                'Procesamiento optimizado',
+                'Mejor experiencia de usuario'
             ]
         }
     })
-
 
 @api_view(['POST'])
 def create_employee_basic(request):
@@ -202,24 +192,20 @@ def create_employee_basic(request):
                 'message': 'Nombre y RUT son requeridos'
             }, status=400)
         
-        # Formatear RUT para almacenamiento
         formatted_rut = format_rut_for_storage(rut)
         
-        # Validar RUT
         if not validate_chilean_rut(formatted_rut):
             return Response({
                 'success': False,
                 'message': f'RUT inválido: {rut}. Verifica el formato y dígito verificador.'
             }, status=400)
         
-        # Verificar RUT único
         if Employee.objects.filter(rut=formatted_rut).exists():
             return Response({
                 'success': False,
                 'message': f'Ya existe un empleado con RUT {formatted_rut}'
             }, status=400)
         
-        # Generar employee_id único
         employee_id = f"EMP{str(uuid.uuid4())[:8].upper()}"
         while Employee.objects.filter(employee_id=employee_id).exists():
             employee_id = f"EMP{str(uuid.uuid4())[:8].upper()}"
@@ -227,7 +213,6 @@ def create_employee_basic(request):
         if not email:
             email = f"{employee_id.lower()}@empresa.com"
         
-        # Crear empleado sin registro facial
         employee = Employee.objects.create(
             employee_id=employee_id,
             name=name,
@@ -248,7 +233,7 @@ def create_employee_basic(request):
             'message': f'Empleado {name} creado exitosamente',
             'employee': serializer.data,
             'face_registered': False,
-            'next_step': 'Puedes registrar su rostro posteriormente'
+            'next_step': f'Puedes registrar su rostro posteriormente (solo {ADVANCED_CONFIG["min_photos"]} fotos necesarias)'
         })
         
     except Exception as e:
@@ -256,131 +241,10 @@ def create_employee_basic(request):
             'success': False,
             'message': f'Error: {str(e)}'
         }, status=500)
-
-
-@api_view(['POST'])
-def create_employee(request):
-    """Crear empleado con registro facial avanzado (8 fotos) - LEGACY"""
-    try:
-        data = request.data
-        name = data.get('name', '').strip()
-        rut = data.get('rut', '').strip()
-        photos = data.get('photos', [])
-        department = data.get('department', 'General').strip()
-        position = data.get('position', 'Empleado').strip()
-        email = data.get('email', '').strip()
-        
-        if not name or not rut:
-            return Response({
-                'success': False,
-                'message': 'Nombre y RUT son requeridos'
-            }, status=400)
-        
-        # Formatear RUT para almacenamiento
-        formatted_rut = format_rut_for_storage(rut)
-        
-        # Validar RUT
-        if not validate_chilean_rut(formatted_rut):
-            return Response({
-                'success': False,
-                'message': f'RUT inválido: {rut}. Verifica el formato y dígito verificador.'
-            }, status=400)
-        
-        # Verificar RUT único
-        if Employee.objects.filter(rut=formatted_rut).exists():
-            return Response({
-                'success': False,
-                'message': f'Ya existe un empleado con RUT {formatted_rut}'
-            }, status=400)
-        
-        if len(photos) < ADVANCED_CONFIG['min_photos']:
-            return Response({
-                'success': False,
-                'message': f'Se requieren {ADVANCED_CONFIG["min_photos"]} fotos',
-                'photos_received': len(photos),
-                'photos_required': ADVANCED_CONFIG['min_photos']
-            }, status=400)
-        
-        employee_id = f"EMP{str(uuid.uuid4())[:8].upper()}"
-        while Employee.objects.filter(employee_id=employee_id).exists():
-            employee_id = f"EMP{str(uuid.uuid4())[:8].upper()}"
-        
-        if not email:
-            email = f"{employee_id.lower()}@empresa.com"
-        
-        face_data = face_recognition_service.process_advanced_registration(photos)
-        
-        min_valid_required = 5  # Mínimo 5 de 8 fotos válidas
-        
-        if face_data['valid_photos'] < min_valid_required:
-            return Response({
-                'success': False,
-                'message': f'Solo {face_data["valid_photos"]} fotos válidas de {len(photos)}. Mínimo {min_valid_required}',
-                'details': 'Asegúrate de que el rostro esté visible y bien iluminado en cada foto',
-                'photos_processed': face_data['total_photos'],
-                'valid_photos': face_data['valid_photos'],
-                'failed_reasons': face_data.get('failed_reasons', [])
-            }, status=400)
-        
-        employee = Employee.objects.create(
-            employee_id=employee_id,
-            name=name,
-            rut=formatted_rut,
-            email=email,
-            department=department,
-            position=position,
-            is_active=True,
-            has_face_registered=True,
-            face_encoding=json.dumps({
-                **face_data,
-                'registration_date': datetime.now().isoformat(),
-                'system_version': 'ADVANCED_v3.0',
-                'rut': formatted_rut
-            }),
-            face_registration_date=timezone.now(),
-            face_quality_score=face_data.get('average_quality', 0.8),
-            face_variations_count=face_data['valid_photos']
-        )
-        
-        # Guardar fotos de muestra
-        for idx, photo in enumerate(photos[:ADVANCED_CONFIG['min_photos']]):
-            try:
-                if ',' in photo:
-                    photo = photo.split(',')[1]
-                
-                image_data = base64.b64decode(photo)
-                image = Image.open(io.BytesIO(image_data))
-                
-                if image.mode != 'RGB':
-                    image = image.convert('RGB')
-                
-                path = os.path.join(FACE_IMAGES_DIR, f"{employee.id}_variation_{idx+1}.jpg")
-                image.save(path, 'JPEG', quality=95)
-            except:
-                pass
-        
-        serializer = EmployeeSerializer(employee)
-        
-        return Response({
-            'success': True,
-            'message': f'Empleado {name} creado con registro facial avanzado',
-            'employee': serializer.data,
-            'face_registered': True,
-            'photos_processed': face_data['valid_photos'],
-            'quality_score': f"{face_data.get('average_quality', 0.8):.1%}",
-            'variations_registered': face_data['valid_photos']
-        })
-        
-    except Exception as e:
-        return Response({
-            'success': False,
-            'message': f'Error: {str(e)}'
-        }, status=500)
-
 
 @api_view(['POST'])
 def register_employee_face(request):
-    """Registro facial avanzado con múltiples fotos"""
+    """Registro facial balanceado con 5 fotos"""
     try:
         data = request.data
         employee_id = data.get('employee_id')
@@ -408,19 +272,24 @@ def register_employee_face(request):
                 'message': 'Empleado no encontrado'
             }, status=404)
         
+        # Procesar con el servicio balanceado
         face_data = face_recognition_service.process_advanced_registration(photos)
         
-        min_valid_required = 5
+        # Requisito más flexible: mínimo 3 de 5 fotos válidas
+        min_valid_required = max(3, ADVANCED_CONFIG['min_photos'] - 2)
         
-        if face_data['valid_photos'] < min_valid_required:
+        if not face_data.get('success', True) or face_data['valid_photos'] < min_valid_required:
             return Response({
                 'success': False,
-                'message': f'Solo {face_data["valid_photos"]} fotos válidas de {len(photos)}',
-                'suggestion': 'Toma las fotos con buena iluminación, rostro completo visible',
-                'failed_reasons': face_data.get('failed_reasons', [])
+                'message': f'Solo {face_data["valid_photos"]} fotos válidas de {len(photos)}. Mínimo {min_valid_required}',
+                'details': f'Sistema balanceado requiere al menos {min_valid_required} fotos válidas',
+                'photos_processed': face_data['total_photos'],
+                'valid_photos': face_data['valid_photos'],
+                'failed_reasons': face_data.get('failed_reasons', []),
+                'suggestion': 'Toma las fotos con buena iluminación frontal y rostro completamente visible'
             }, status=400)
         
-        # Guardar fotos
+        # Guardar fotos de muestra
         for idx, photo in enumerate(photos[:ADVANCED_CONFIG['min_photos']]):
             try:
                 if ',' in photo:
@@ -433,13 +302,19 @@ def register_employee_face(request):
                     image = image.convert('RGB')
                 
                 path = os.path.join(FACE_IMAGES_DIR, f"{employee_id}_variation_{idx+1}.jpg")
-                image.save(path, 'JPEG', quality=95)
+                image.save(path, 'JPEG', quality=90)
             except:
                 pass
         
+        # Actualizar empleado
         face_data['registration_date'] = datetime.now().isoformat()
-        face_data['system_version'] = 'ADVANCED_v3.0'
+        face_data['system_version'] = 'BALANCED_v1.0'
         face_data['rut'] = employee.rut
+        face_data['config_used'] = {
+            'photos_required': ADVANCED_CONFIG['min_photos'],
+            'tolerance': ADVANCED_CONFIG['base_tolerance'],
+            'min_confidence': ADVANCED_CONFIG['min_confidence']
+        }
         
         employee.face_encoding = json.dumps(face_data)
         employee.has_face_registered = True
@@ -450,19 +325,22 @@ def register_employee_face(request):
         
         return Response({
             'success': True,
-            'message': f'Registro facial avanzado completado para {employee.name}',
+            'message': f'Registro facial balanceado completado para {employee.name}',
             'details': {
                 'photos_processed': face_data['valid_photos'],
                 'quality_score': f"{face_data.get('average_quality', 0.8):.1%}",
                 'variations_count': face_data['valid_photos'],
                 'features_extracted': len(face_data.get('encodings', [])),
-                'environmental_adaptations': len(face_data.get('enhanced_variations', []))
+                'system_mode': 'BALANCED',
+                'processing_time': 'Optimizado para velocidad',
+                'tolerance_level': 'Balanceado para uso real'
             },
             'employee': {
                 'id': str(employee.id),
                 'name': employee.name,
                 'rut': employee.rut,
-                'ready': True
+                'ready': True,
+                'face_registered': True
             }
         })
         
@@ -472,10 +350,9 @@ def register_employee_face(request):
             'message': f'Error: {str(e)}'
         }, status=500)
 
-
 @api_view(['POST'])
 def verify_attendance_face(request):
-    """Verificación facial avanzada con timeout"""
+    """Verificación facial balanceada con timeout reducido"""
     try:
         data = request.data
         photo_base64 = data.get('photo')
@@ -490,7 +367,7 @@ def verify_attendance_face(request):
                 'message': 'Se requiere foto'
             }, status=400)
         
-        print(f"\n🔍 Iniciando verificación avanzada con timeout de {ADVANCED_CONFIG['verification_timeout']}s...")
+        print(f"\n🔍 Iniciando verificación balanceada con timeout de {ADVANCED_CONFIG['verification_timeout']}s...")
         start_time = time.time()
         
         verification_result, error = face_recognition_service.advanced_verify(
@@ -499,7 +376,7 @@ def verify_attendance_face(request):
         
         elapsed_time = time.time() - start_time
         
-        if error and "Timeout" in error:
+        if error and ("Timeout" in error or "TIMEOUT" in error):
             return Response({
                 'success': False,
                 'message': '⏱️ VERIFICACIÓN CANCELADA - Tiempo límite excedido',
@@ -508,11 +385,12 @@ def verify_attendance_face(request):
                 'elapsed_time': f'{elapsed_time:.1f}s',
                 'error_type': 'TIMEOUT',
                 'suggestions': [
-                    "🚫 Verifica que tu rostro esté registrado en el sistema",
+                    "💡 Sistema balanceado - verifica condiciones:",
+                    "📸 Asegúrate de estar registrado en el sistema",
                     "💡 Mejora la iluminación frontal",
                     "📱 Acércate más a la cámara",
                     "🎯 Centra tu rostro en la imagen",
-                    "👓 Si usas lentes, asegúrate de que estén limpios"
+                    "👓 Si usas lentes, verifica que estén limpios"
                 ]
             }, status=408)
         
@@ -521,19 +399,21 @@ def verify_attendance_face(request):
                 'success': False,
                 'message': f'❌ VERIFICACIÓN FALLIDA: {error}',
                 'elapsed_time': f'{elapsed_time:.1f}s',
-                'error_type': 'VERIFICATION_FAILED'
+                'error_type': 'VERIFICATION_FAILED',
+                'system_mode': 'BALANCED'
             }, status=400)
         
         if not verification_result:
             return Response({
                 'success': False,
                 'message': 'Error interno procesando verificación',
-                'elapsed_time': f'{elapsed_time:.1f}s'
+                'elapsed_time': f'{elapsed_time:.1f}s',
+                'system_mode': 'BALANCED'
             }, status=500)
         
-        best_match = verification_result['best_match']
-        best_confidence = verification_result['best_confidence']
-        all_results = verification_result['all_results']
+        best_match = verification_result.get('best_match')
+        best_confidence = verification_result.get('best_confidence', 0)
+        all_results = verification_result.get('all_results', [])
         
         if not best_match:
             return Response({
@@ -542,18 +422,30 @@ def verify_attendance_face(request):
                 'error_type': 'UNAUTHORIZED',
                 'elapsed_time': f'{elapsed_time:.1f}s',
                 'required_confidence': f"{ADVANCED_CONFIG['min_confidence']:.0%}",
+                'system_mode': 'BALANCED',
                 'security_tips': [
-                    '⚠️ Sistema en modo seguridad avanzada',
+                    '⚠️ Sistema en modo balanceado - más tolerante pero seguro',
                     '📸 Asegúrate de estar registrado en el sistema',
                     '💡 Iluminación frontal uniforme requerida',
-                    '🎯 Mirar directamente a la cámara'
+                    '🎯 Mirar directamente a la cámara',
+                    f'📊 Confianza mínima requerida: {ADVANCED_CONFIG["min_confidence"]:.0%}'
                 ]
             }, status=403)
         
-        print(f"✅ VERIFICADO: {best_match.name} ({best_confidence:.1%}) en {elapsed_time:.1f}s")
+        print(f"✅ VERIFICADO: {best_match['name']} ({best_confidence:.1%}) en {elapsed_time:.1f}s")
+        
+        # Buscar el objeto Employee por el best_match
+        try:
+            employee_obj = Employee.objects.get(id=best_match['id'], is_active=True)
+        except Employee.DoesNotExist:
+            return Response({
+                'success': False,
+                'message': 'Error: Empleado verificado no encontrado en base de datos',
+                'error_type': 'DATA_INCONSISTENCY'
+            }, status=500)
         
         attendance_record = AttendanceRecord.objects.create(
-            employee=best_match,
+            employee=employee_obj,
             attendance_type=attendance_type,
             timestamp=timezone.now(),
             location_lat=location_lat,
@@ -561,7 +453,7 @@ def verify_attendance_face(request):
             address=address,
             verification_method='facial',
             face_confidence=best_confidence,
-            notes=f'Verificación facial avanzada ({best_confidence:.1%}) - {elapsed_time:.1f}s'
+            notes=f'Verificación facial balanceada ({best_confidence:.1%}) - {elapsed_time:.1f}s'
         )
         
         serializer = AttendanceRecordSerializer(attendance_record)
@@ -570,17 +462,18 @@ def verify_attendance_face(request):
             'success': True,
             'message': f'✅ {attendance_type.upper()} REGISTRADA',
             'employee': {
-                'id': str(best_match.id),
-                'name': best_match.name,
-                'employee_id': best_match.employee_id,
-                'rut': best_match.rut,
-                'department': best_match.department
+                'id': str(employee_obj.id),
+                'name': employee_obj.name,
+                'employee_id': employee_obj.employee_id,
+                'rut': employee_obj.rut,
+                'department': employee_obj.department
             },
             'verification': {
                 'confidence': f'{best_confidence:.1%}',
-                'method': 'FACIAL_RECOGNITION_ADVANCED',
+                'method': 'FACIAL_RECOGNITION_BALANCED',
                 'elapsed_time': f'{elapsed_time:.1f}s',
-                'security_level': 'MÁXIMO'
+                'security_level': 'BALANCEADO',
+                'system_version': 'BALANCED_v1.0'
             },
             'record': serializer.data,
             'timestamp': timezone.now().strftime('%d/%m/%Y %H:%M:%S')
@@ -590,9 +483,9 @@ def verify_attendance_face(request):
         return Response({
             'success': False,
             'message': f'Error crítico: {str(e)}',
-            'error_type': 'SYSTEM_ERROR'
+            'error_type': 'SYSTEM_ERROR',
+            'system_mode': 'BALANCED'
         }, status=500)
-
 
 @api_view(['POST'])
 def verify_qr(request):
@@ -631,7 +524,6 @@ def verify_qr(request):
                 rut_from_qr = qr_json.get('rut') or qr_json.get('RUT') or qr_json.get('run') or qr_json.get('RUN')
             except:
                 # Estrategia 3: Asumir que el QR contiene directamente el RUT
-                # Limpiar caracteres especiales y buscar secuencia válida
                 clean_data = re.sub(r'[^0-9kK-]', '', qr_data).upper()
                 if len(clean_data) >= 8:
                     rut_from_qr = clean_data
@@ -659,7 +551,7 @@ def verify_qr(request):
                 'message': f'RUT extraído del QR no es válido: {formatted_rut}'
             }, status=400)
         
-        # Buscar empleado por RUT (búsqueda flexible)
+        # Buscar empleado por RUT
         employee = search_employee_by_rut(formatted_rut)
         if not employee:
             return Response({
@@ -709,7 +601,6 @@ def verify_qr(request):
             'error_type': 'QR_VERIFICATION_ERROR'
         }, status=500)
 
-# --- INICIO: VISTA REFACTORIZADA ---
 @api_view(['POST'])
 def mark_attendance(request):
     """Marcar asistencia manual o procesar verificación"""
@@ -780,10 +671,7 @@ def mark_attendance(request):
         
     except Exception as e:
         return Response({'success': False, 'message': f'Error: {str(e)}'}, status=500)
-# --- FIN: VISTA REFACTORIZADA ---
 
-
-# --- INICIO: VISTA DE SINCRONIZACIÓN REFACTORIZADA ---
 @api_view(['POST'])
 def sync_offline_records(request):
     """Sincronizar registros offline"""
@@ -796,7 +684,7 @@ def sync_offline_records(request):
         
         for record_data in offline_records:
             try:
-                response = None # Para manejar la respuesta de los métodos no refactorizados
+                response = None
                 
                 if record_data.get('photo'):
                     print(f"   Procesando registro facial...")
@@ -814,7 +702,7 @@ def sync_offline_records(request):
                     mock_request.content_type = 'application/json'
                     response = verify_qr(mock_request)
                 
-                else: # Lógica corregida para registros manuales
+                else:
                     employee_id = record_data.get('employee_id')
                     employee_name = record_data.get('employee_name')
                     
@@ -839,7 +727,6 @@ def sync_offline_records(request):
                     
                     print(f"   Procesando registro manual de {employee_obj.name}...")
                     
-                    # Llamada directa a la función auxiliar
                     _create_manual_attendance_record(
                         employee=employee_obj,
                         attendance_type=record_data.get('type', 'entrada'),
@@ -850,7 +737,6 @@ def sync_offline_records(request):
                         is_offline_sync=True,
                         offline_timestamp=record_data.get('timestamp')
                     )
-                    # Si la función anterior no lanza una excepción, fue exitosa
                     synced_count += 1
                     print(f"   ✅ Sincronizado exitosamente.")
 
@@ -875,13 +761,12 @@ def sync_offline_records(request):
             'synced_count': synced_count,
             'error_count': len(errors),
             'errors': errors[:10],
-            'message': f'Sincronizados {synced_count} de {len(offline_records)} registros'
+            'message': f'Sincronizados {synced_count} de {len(offline_records)} registros',
+            'system_mode': 'BALANCED'
         })
         
     except Exception as e:
         return Response({'success': False, 'message': f'Error crítico en la sincronización: {str(e)}'}, status=500)
-# --- FIN: VISTA DE SINCRONIZACIÓN REFACTORIZADA ---
-
 
 @api_view(['GET'])
 def get_employees(request):
@@ -890,17 +775,23 @@ def get_employees(request):
         employees = Employee.objects.filter(is_active=True).order_by('name')
         serializer = EmployeeSerializer(employees, many=True)
         
+        total_employees = employees.count()
+        employees_with_faces = employees.filter(has_face_registered=True).count()
+        
         return Response({
             'success': True,
             'employees': serializer.data,
-            'count': employees.count(),
-            'system_mode': 'REGISTRO_FACIAL_OPCIONAL',
+            'count': total_employees,
+            'employees_with_faces': employees_with_faces,
+            'face_registration_rate': f"{(employees_with_faces/total_employees*100):.1f}%" if total_employees > 0 else "0%",
+            'system_mode': 'BALANCED_FACIAL_RECOGNITION',
             'features': {
                 'basic_registration': True,
-                'optional_facial_recognition': True,
+                'balanced_facial_recognition': True,
+                'photos_required': ADVANCED_CONFIG['min_photos'],
                 'qr_verification': True,
                 'offline_sync': True,
-                'advanced_variations': True
+                'optimized_processing': True
             }
         })
         
@@ -909,7 +800,6 @@ def get_employees(request):
             'success': False,
             'message': f'Error: {str(e)}'
         }, status=500)
-
 
 @api_view(['GET'])
 def get_attendance_records(request):
@@ -935,15 +825,27 @@ def get_attendance_records(request):
         records = queryset[:limit]
         serializer = AttendanceRecordSerializer(records, many=True)
         
+        # Estadísticas adicionales
+        facial_records = records.filter(verification_method='facial').count()
+        qr_records = records.filter(verification_method='qr').count()
+        manual_records = records.filter(verification_method='manual').count()
+        
         return Response({
             'success': True,
             'records': serializer.data,
             'count': len(serializer.data),
             'total': total_count,
+            'statistics': {
+                'facial_recognitions': facial_records,
+                'qr_verifications': qr_records,
+                'manual_entries': manual_records
+            },
             'system_info': {
-                'optional_face_registration': True,
+                'balanced_face_registration': True,
+                'photos_required': ADVANCED_CONFIG['min_photos'],
                 'qr_support': True,
-                'timeout_seconds': ADVANCED_CONFIG['verification_timeout']
+                'timeout_seconds': ADVANCED_CONFIG['verification_timeout'],
+                'system_mode': 'BALANCED'
             }
         })
         
@@ -952,7 +854,6 @@ def get_attendance_records(request):
             'success': False,
             'message': f'Error: {str(e)}'
         }, status=500)
-
 
 @api_view(['DELETE'])
 def delete_employee(request, employee_id):
@@ -972,7 +873,7 @@ def delete_employee(request, employee_id):
         
         return Response({
             'success': True,
-            'message': f'{employee_name} eliminado completamente'
+            'message': f'{employee_name} eliminado completamente del sistema'
         })
         
     except Employee.DoesNotExist:
@@ -985,7 +886,6 @@ def delete_employee(request, employee_id):
             'success': False,
             'message': f'Error: {str(e)}'
         }, status=500)
-
 
 @api_view(['DELETE'])
 def delete_attendance(request, attendance_id):
@@ -1013,7 +913,6 @@ def delete_attendance(request, attendance_id):
             'success': False,
             'message': f'Error: {str(e)}'
         }, status=500)
-
 
 def attendance_panel(request):
     """Panel web"""

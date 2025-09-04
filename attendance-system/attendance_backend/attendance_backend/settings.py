@@ -91,9 +91,8 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:19006",
     "http://127.0.0.1:19006",
-    "http://192.168.1.100:19006",  # Cambia por tu IP local
-    "http://192.168.96.36:8081",   # Tu IP actual
-    "http://192.168.96.36:19006",  # Tu IP actual
+    "http://192.168.72.103:19006",  # Nueva IP
+    "http://192.168.72.103:8081",   # Nueva IP
 ]
 
 CORS_ALLOW_ALL_ORIGINS = True
