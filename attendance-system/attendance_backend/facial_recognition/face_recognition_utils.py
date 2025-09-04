@@ -15,70 +15,92 @@ logger = logging.getLogger(__name__)
 
 class AdvancedFaceRecognitionService:
     def __init__(self):
+        # **CONFIGURACIÓN MÁS ESTRICTA PARA EVITAR FALSOS POSITIVOS**
         self.ADVANCED_CONFIG = {
             'min_photos': 8,
-            'base_tolerance': 0.50, # Valor más estricto
+            'base_tolerance': 0.45,  # ✅ MÁS ESTRICTO (era 0.50)
             'adaptive_tolerance': True,
-            'min_confidence': 0.75, # Umbral de confianza más seguro
-            'min_matches': 1,
+            'min_confidence': 0.85,  # ✅ MUCHO MÁS ESTRICTO (era 0.75)
+            'strict_confidence_threshold': 0.90,  # ✅ NUEVO: Umbral ultra estricto
+            'min_matches': 2,  # ✅ MÁS ESTRICTO: Requiere al menos 2 coincidencias buenas
             'use_landmarks': True,
             'use_environmental_adaptation': True,
-            'max_tolerance': 0.76,
+            'max_tolerance': 0.60,  # ✅ MÁS ESTRICTO (era 0.76)
             'verification_timeout': 15,
-            'strict_mode': False,
-            'min_face_size': 40,
+            'strict_mode': True,  # ✅ ACTIVAR MODO ESTRICTO
+            'min_face_size': 50,  # ✅ MÁS ESTRICTO (era 40)
             'brightness_adaptation': True,
             'contrast_enhancement': True,
             'blur_detection': True,
-            'quality_threshold': 0.1,
+            'quality_threshold': 0.3,  # ✅ MÁS ESTRICTO (era 0.1)
+            
+            # ✅ NUEVOS PARÁMETROS DE SEGURIDAD
+            'require_multiple_angle_matches': True,
+            'min_quality_for_verification': 0.4,
+            'max_euclidean_distance': 0.45,  # Distancia máxima permitida
+            'min_cosine_similarity': 0.7,   # Similitud coseno mínima
+            'face_area_threshold': 2500,    # Área mínima del rostro en píxeles
         }
 
     def detect_image_quality(self, image_array):
-        """Detecta calidad - ultra permisivo para cámaras malas"""
+        """Detecta calidad - AHORA MÁS ESTRICTO"""
         try:
             pil_image = Image.fromarray(image_array)
             
-            # Desenfoque ultra permisivo
+            # Detección de desenfoque MÁS ESTRICTA
             gray = cv2.cvtColor(image_array, cv2.COLOR_RGB2GRAY)
             laplacian_var = cv2.Laplacian(gray, cv2.CV_64F).var()
-            blur_score = min(laplacian_var / 20.0, 1.0)
+            blur_score = min(laplacian_var / 50.0, 1.0)  # ✅ MÁS EXIGENTE
             
-            # Brillo ultra tolerante
+            # Análisis de brillo MÁS ESTRICTO
             stat = ImageStat.Stat(pil_image)
             brightness = sum(stat.mean) / len(stat.mean) / 255.0
-            brightness_score = 1.0
+            # Penalizar imágenes muy oscuras o muy claras
+            if brightness < 0.2 or brightness > 0.9:
+                brightness_score = 0.3
+            elif brightness < 0.3 or brightness > 0.8:
+                brightness_score = 0.6
+            else:
+                brightness_score = 1.0
             
-            # Contraste ultra permisivo
-            contrast_score = min(np.std(np.array(pil_image)) / 64.0, 1.0)
+            # Análisis de contraste MÁS EXIGENTE
+            contrast_std = np.std(np.array(pil_image))
+            contrast_score = min(contrast_std / 80.0, 1.0)  # ✅ MÁS EXIGENTE
             
-            # Puntaje siempre aceptable
-            quality_score = max(0.5, (blur_score * 0.3 + brightness_score * 0.3 + contrast_score * 0.4))
+            # Puntaje general MÁS ESTRICTO
+            quality_score = (blur_score * 0.4 + brightness_score * 0.3 + contrast_score * 0.3)
+            
+            # ✅ RECHAZO AUTOMÁTICO SI LA CALIDAD ES MUY BAJA
+            is_acceptable = quality_score >= self.ADVANCED_CONFIG['quality_threshold']
             
             return {
                 'overall_quality': quality_score,
                 'blur_score': blur_score,
                 'brightness': brightness,
                 'contrast': contrast_score,
-                'is_acceptable': True
+                'is_acceptable': is_acceptable
             }
         except:
             return {
-                'overall_quality': 0.8,
-                'blur_score': 0.8,
+                'overall_quality': 0.2,  # ✅ Valor por defecto MÁS BAJO
+                'blur_score': 0.2,
                 'brightness': 0.5,
-                'contrast': 0.8,
-                'is_acceptable': True
+                'contrast': 0.2,
+                'is_acceptable': False
             }
 
     def enhance_image_quality(self, image):
-        """Mejora la calidad de la imagen automáticamente - versión extendida"""
+        """Mejora la calidad de la imagen automáticamente"""
         enhanced_versions = []
         
         try:
             enhanced_versions.append(image)
             img_array = np.array(image)
+            
+            # Reducir número de versiones para ser más eficiente
+            # CLAHE adaptativo
             lab = cv2.cvtColor(img_array, cv2.COLOR_RGB2LAB)
-            clahe_configs = [(2.0, (8,8)), (3.0, (8,8)), (4.0, (8,8)), (2.0, (4,4))]
+            clahe_configs = [(2.0, (8,8)), (3.0, (8,8))]  # Menos configuraciones
             
             for clip_limit, tile_grid in clahe_configs:
                 try:
@@ -90,7 +112,8 @@ class AdvancedFaceRecognitionService:
                 except:
                     continue
             
-            gamma_values = [0.5, 0.6, 0.7, 0.8, 0.9, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6]
+            # Menos variaciones gamma
+            gamma_values = [0.7, 0.8, 1.2, 1.3]
             for gamma in gamma_values:
                 try:
                     inv_gamma = 1.0 / gamma
@@ -101,86 +124,28 @@ class AdvancedFaceRecognitionService:
                 except:
                     continue
             
-            sharpening_kernels = [
-                np.array([[-1,-1,-1], [-1, 9,-1], [-1,-1,-1]]),
-                np.array([[0,-1,0], [-1, 5,-1], [0,-1,0]]),
-                np.array([[-1,-1,-1], [-1,12,-1], [-1,-1,-1]]) / 4
-            ]
-            
-            for kernel in sharpening_kernels:
-                try:
-                    sharpened = cv2.filter2D(img_array, -1, kernel)
-                    sharpened = np.clip(sharpened, 0, 255).astype(np.uint8)
-                    enhanced_versions.append(Image.fromarray(sharpened))
-                except:
-                    continue
-            
-            try:
-                yuv = cv2.cvtColor(img_array, cv2.COLOR_RGB2YUV)
-                yuv[:,:,0] = cv2.equalizeHist(yuv[:,:,0])
-                hist_eq_yuv = cv2.cvtColor(yuv, cv2.COLOR_YUV2RGB)
-                enhanced_versions.append(Image.fromarray(hist_eq_yuv))
-                
-                hsv = cv2.cvtColor(img_array, cv2.COLOR_RGB2HSV)
-                hsv[:,:,2] = cv2.equalizeHist(hsv[:,:,2])
-                hist_eq_hsv = cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB)
-                enhanced_versions.append(Image.fromarray(hist_eq_hsv))
-            except:
-                pass
-            
-            try:
-                bilateral = cv2.bilateralFilter(img_array, 9, 75, 75)
-                enhanced_versions.append(Image.fromarray(bilateral))
-                median = cv2.medianBlur(img_array, 5)
-                enhanced_versions.append(Image.fromarray(median))
-                gaussian = cv2.GaussianBlur(img_array, (3, 3), 0)
-                enhanced_versions.append(Image.fromarray(gaussian))
-            except:
-                pass
-            
-            brightness_values = [-50, -30, -10, 10, 30, 50]
-            contrast_values = [0.8, 0.9, 1.1, 1.2, 1.3, 1.4]
-            
-            for brightness in brightness_values[:3]:
-                for contrast in contrast_values[:2]:
-                    try:
-                        enhanced = ImageEnhance.Brightness(image).enhance(1 + brightness/100)
-                        enhanced = ImageEnhance.Contrast(enhanced).enhance(contrast)
-                        enhanced_versions.append(enhanced)
-                    except:
-                        continue
-            
-            return enhanced_versions[:25]
+            return enhanced_versions[:12]  # Limitar a 12 versiones
             
         except Exception as e:
             logger.error(f"Error mejorando imagen: {e}")
             return [image]
 
     def create_environmental_adaptations(self, image_array, face_location):
-        """Crea adaptaciones extensivas para condiciones variables"""
+        """Crea adaptaciones menos extensivas pero más precisas"""
         adaptations = []
         
         try:
             image = Image.fromarray(image_array)
             top, right, bottom, left = face_location
             
+            # ✅ MENOS CONDICIONES PERO MÁS PRECISAS
             lighting_conditions = [
-                {'brightness': 0.4, 'contrast': 1.6, 'name': 'extreme_low_light'},
-                {'brightness': 0.5, 'contrast': 1.5, 'name': 'very_low_light'},
                 {'brightness': 0.6, 'contrast': 1.4, 'name': 'low_light'},
-                {'brightness': 0.7, 'contrast': 1.3, 'name': 'dim_light'},
                 {'brightness': 0.8, 'contrast': 1.2, 'name': 'indoor_low'},
-                {'brightness': 0.9, 'contrast': 1.1, 'name': 'indoor_normal'},
                 {'brightness': 1.0, 'contrast': 1.0, 'name': 'neutral'},
-                {'brightness': 1.1, 'contrast': 0.9, 'name': 'outdoor_normal'},
                 {'brightness': 1.2, 'contrast': 0.8, 'name': 'bright_light'},
-                {'brightness': 1.3, 'contrast': 0.7, 'name': 'very_bright'},
-                {'brightness': 1.4, 'contrast': 0.6, 'name': 'extreme_bright'},
-                {'brightness': 1.5, 'contrast': 0.5, 'name': 'overexposed'},
-                {'brightness': 0.6, 'contrast': 1.8, 'name': 'high_contrast_dark'},
-                {'brightness': 1.2, 'contrast': 1.6, 'name': 'high_contrast_bright'},
-                {'brightness': 0.9, 'contrast': 0.6, 'name': 'low_contrast'},
-                {'brightness': 1.1, 'contrast': 0.7, 'name': 'washed_out'}
+                {'brightness': 0.7, 'contrast': 1.6, 'name': 'high_contrast'},
+                {'brightness': 1.1, 'contrast': 0.7, 'name': 'outdoor_normal'}
             ]
             
             for condition in lighting_conditions:
@@ -270,7 +235,7 @@ class AdvancedFaceRecognitionService:
             return None
 
     def process_advanced_registration(self, photos_base64):
-        """Procesa registro con máxima permisividad para cámaras malas"""
+        """Procesa registro manteniendo estándares altos pero realistas"""
         all_encodings = []
         all_landmarks = []
         all_environmental_adaptations = []
@@ -278,7 +243,7 @@ class AdvancedFaceRecognitionService:
         failed_reasons = []
         quality_scores = []
         
-        print(f"\n📸 Iniciando registro ultra permisivo con {len(photos_base64)} fotos...")
+        print(f"\n📸 Iniciando registro estricto con {len(photos_base64)} fotos...")
         
         for idx, photo_base64 in enumerate(photos_base64):
             try:
@@ -300,6 +265,13 @@ class AdvancedFaceRecognitionService:
                 
                 quality_info = self.detect_image_quality(image_array)
                 quality_scores.append(quality_info['overall_quality'])
+                
+                if not quality_info['is_acceptable']:
+                    failed_reasons.append(f"Foto {idx+1}: Calidad insuficiente ({quality_info['overall_quality']:.1%})")
+                    all_encodings.append(None)
+                    all_landmarks.append(None)
+                    all_environmental_adaptations.append([])
+                    continue
                 
                 enhanced_versions = self.enhance_image_quality(image)
                 
@@ -355,15 +327,20 @@ class AdvancedFaceRecognitionService:
                     all_environmental_adaptations.append([])
                     continue
                 
+                # Verificar tamaño del rostro
                 top, right, bottom, left = face_location
-                face_width = right - left
-                face_height = bottom - top
+                face_area = (right - left) * (bottom - top)
                 
-                if face_width < self.ADVANCED_CONFIG['min_face_size'] or face_height < self.ADVANCED_CONFIG['min_face_size']:
-                    print(f"     ⚠️ Rostro pequeño ({face_width}x{face_height}) pero se procesa")
+                if face_area < self.ADVANCED_CONFIG['face_area_threshold']:
+                    failed_reasons.append(f"Foto {idx+1}: Rostro muy pequeño ({face_area} px²)")
+                    all_encodings.append(None)
+                    all_landmarks.append(None)
+                    all_environmental_adaptations.append([])
+                    continue
                 
+                # Extraer características con múltiples intentos
                 encodings = None
-                for num_jitters in [10, 15, 5, 1]:
+                for num_jitters in [10, 15, 5]:
                     try:
                         encodings = face_recognition.face_encodings(
                             best_image_array,
@@ -411,11 +388,10 @@ class AdvancedFaceRecognitionService:
         valid_landmarks = [lm for lm in all_landmarks if lm is not None]
         valid_adaptations = [ada for ada in all_environmental_adaptations if ada and len(ada) > 0]
         
-        average_quality = np.mean(quality_scores) if quality_scores else 0.5
+        average_quality = np.mean(quality_scores) if quality_scores else 0.0
         
         print(f"✅ Registro completado: {len(valid_encodings)} fotos válidas de {len(photos_base64)}")
         print(f"📊 Calidad promedio: {average_quality:.2f}")
-        print(f"🔧 Adaptaciones creadas: {sum(len(ada) for ada in valid_adaptations)}")
         
         return {
             'encodings': valid_encodings,
@@ -429,7 +405,7 @@ class AdvancedFaceRecognitionService:
         }
 
     def advanced_face_comparison(self, stored_data, current_encoding, current_landmarks):
-        """Comparación facial ultra permisiva para cámaras de baja calidad"""
+        """Comparación facial MÁS ESTRICTA - RECHAZA FALSOS POSITIVOS"""
         try:
             stored_encodings = stored_data.get('encodings', [])
             stored_landmarks = stored_data.get('landmarks', [])
@@ -440,9 +416,13 @@ class AdvancedFaceRecognitionService:
             
             all_scores = []
             detailed_matches = []
+            high_quality_matches = 0
             
             max_tolerance = self.ADVANCED_CONFIG['max_tolerance']
+            max_euclidean = self.ADVANCED_CONFIG['max_euclidean_distance']
+            min_cosine = self.ADVANCED_CONFIG['min_cosine_similarity']
             
+            # ✅ VERIFICACIÓN ESTRICTA CON CADA ENCODING ALMACENADO
             for i, stored_enc in enumerate(stored_encodings):
                 if stored_enc is None:
                     continue
@@ -450,17 +430,41 @@ class AdvancedFaceRecognitionService:
                 stored_enc_array = np.array(stored_enc)
                 distances = face_recognition.face_distance([stored_enc_array], current_encoding)
                 euclidean_dist = distances[0]
-                euclidean_score = max(0, 1 - (euclidean_dist / self.ADVANCED_CONFIG['base_tolerance'])) 
                 
+                # ✅ RECHAZO INMEDIATO SI LA DISTANCIA ES MUY ALTA
+                if euclidean_dist > max_euclidean:
+                    detailed_matches.append({
+                        'photo_index': i,
+                        'euclidean_distance': euclidean_dist,
+                        'rejected_reason': 'Distancia euclidiana excesiva',
+                        'combined': 0.0
+                    })
+                    continue
+                
+                euclidean_score = max(0, 1 - (euclidean_dist / self.ADVANCED_CONFIG['base_tolerance']))
+                
+                # Similitud coseno MÁS ESTRICTA
                 try:
                     cosine_sim = 1 - distance.cosine(stored_enc_array, current_encoding)
-                    if np.isnan(cosine_sim):
+                    if np.isnan(cosine_sim) or cosine_sim < min_cosine:
                         cosine_sim = 0
                     else:
                         cosine_sim = max(0, cosine_sim)
                 except:
                     cosine_sim = 0
                 
+                # ✅ RECHAZO SI LA SIMILITUD COSENO ES MUY BAJA
+                if cosine_sim < min_cosine:
+                    detailed_matches.append({
+                        'photo_index': i,
+                        'euclidean_distance': euclidean_dist,
+                        'cosine_similarity': cosine_sim,
+                        'rejected_reason': 'Similitud coseno insuficiente',
+                        'combined': 0.0
+                    })
+                    continue
+                
+                # Correlación
                 try:
                     correlation = np.corrcoef(stored_enc_array, current_encoding)[0, 1]
                     if np.isnan(correlation):
@@ -470,24 +474,30 @@ class AdvancedFaceRecognitionService:
                 except:
                     correlation = 0
                 
+                # Distancia Manhattan
                 manhattan_dist = np.sum(np.abs(stored_enc_array - current_encoding)) / len(stored_enc_array)
                 manhattan_score = max(0, 1 - (manhattan_dist / 2))
                 
+                # ✅ CÁLCULO MÁS ESTRICTO DEL PUNTAJE COMBINADO
                 combined_score = (
-                    euclidean_score * 0.4 +
-                    cosine_sim * 0.4 +
-                    correlation * 0.1 +
-                    manhattan_score * 0.1
+                    euclidean_score * 0.5 +  # Mayor peso a la distancia euclidiana
+                    cosine_sim * 0.4 +       # Mayor peso a la similitud coseno
+                    correlation * 0.05 +     # Menor peso a la correlación
+                    manhattan_score * 0.05   # Menor peso a Manhattan
                 )
                 
-                # Reintroducir bonos controlados que no inflan en exceso el puntaje
-                if euclidean_dist < max_tolerance:
-                    combined_score += 0.05
+                # ✅ BONIFICACIONES MÁS CONSERVADORAS
+                bonus_applied = 0
+                if euclidean_dist < 0.35:  # Muy buena coincidencia
+                    bonus_applied += 0.03
+                    high_quality_matches += 1
                 
-                if euclidean_dist < 0.7:
-                    combined_score += 0.02
+                if euclidean_dist < max_tolerance and cosine_sim > 0.8:
+                    bonus_applied += 0.02
                 
-                all_scores.append(combined_score)
+                final_score = combined_score + bonus_applied
+                all_scores.append(final_score)
+                
                 detailed_matches.append({
                     'photo_index': i,
                     'euclidean_distance': euclidean_dist,
@@ -495,10 +505,12 @@ class AdvancedFaceRecognitionService:
                     'cosine': cosine_sim,
                     'correlation': correlation,
                     'manhattan': manhattan_score,
-                    'combined': combined_score,
-                    'within_tolerance': euclidean_dist < max_tolerance
+                    'combined': final_score,
+                    'within_tolerance': euclidean_dist < max_tolerance,
+                    'high_quality': euclidean_dist < 0.35
                 })
             
+            # ✅ PROCESAMIENTO ESTRICTO DE ADAPTACIONES AMBIENTALES
             adaptation_scores = []
             for adaptations in environmental_adaptations:
                 for adaptation in adaptations:
@@ -507,15 +519,20 @@ class AdvancedFaceRecognitionService:
                             adapt_enc = np.array(adaptation['encoding'])
                             adapt_distances = face_recognition.face_distance([adapt_enc], current_encoding)
                             adapt_dist = adapt_distances[0]
-                            adapt_score = max(0, 1 - (adapt_dist / self.ADVANCED_CONFIG['base_tolerance']))
-                            adaptation_scores.append(adapt_score)
-                            all_scores.append(adapt_score)
+                            
+                            # ✅ SOLO CONSIDERAR ADAPTACIONES DE ALTA CALIDAD
+                            if adapt_dist <= max_euclidean:
+                                adapt_score = max(0, 1 - (adapt_dist / self.ADVANCED_CONFIG['base_tolerance']))
+                                if adapt_score > 0.6:  # Solo adaptaciones buenas
+                                    adaptation_scores.append(adapt_score)
+                                    all_scores.append(adapt_score)
                         except:
                             continue
             
             if not all_scores:
-                return False, 0.0, "No se pudieron calcular coincidencias"
+                return False, 0.0, "No se encontraron coincidencias válidas"
 
+            # ✅ VERIFICACIÓN DE LANDMARKS MÁS ESTRICTA
             landmark_bonus = 0
             if current_landmarks is not None and stored_landmarks:
                 landmark_similarities = []
@@ -527,46 +544,62 @@ class AdvancedFaceRecognitionService:
                             stored_lm_array = np.array(stored_lm)
                             min_len = min(len(current_lm_array), len(stored_lm_array))
                             
-                            if min_len > 20:
+                            if min_len > 30:  # ✅ MÁS EXIGENTE
                                 lm_similarity = 1 - distance.cosine(
                                     current_lm_array[:min_len],
                                     stored_lm_array[:min_len]
                                 )
-                                if not np.isnan(lm_similarity) and lm_similarity > -0.5:
+                                if not np.isnan(lm_similarity) and lm_similarity > 0.7:  # ✅ MÁS EXIGENTE
                                     landmark_similarities.append(max(0, lm_similarity))
                         except:
                             continue
                 
                 if landmark_similarities:
                     landmark_score = np.mean(landmark_similarities)
-                    landmark_bonus = min(landmark_score * 0.10, 0.10)
-            
+                    landmark_bonus = min(landmark_score * 0.05, 0.05)  # ✅ BONUS MÁS CONSERVADOR
+
+            # ✅ CÁLCULO FINAL MÁS ESTRICTO
             sorted_scores = sorted(all_scores, reverse=True)
             
-            best_score = sorted_scores[0] if sorted_scores else 0
+            # Rechazar si no hay suficientes coincidencias de calidad
+            if len(sorted_scores) < self.ADVANCED_CONFIG['min_matches']:
+                return False, 0.0, f"Insuficientes coincidencias: {len(sorted_scores)} < {self.ADVANCED_CONFIG['min_matches']}"
             
-            # Lógica de bonificación por consistencia
-            top_3_scores = sorted_scores[:min(3, len(sorted_scores))]
-            score_std = np.std(top_3_scores) if len(top_3_scores) > 1 else 0
+            # Rechazar si no hay coincidencias de alta calidad
+            if high_quality_matches == 0:
+                return False, 0.0, "Sin coincidencias de alta calidad"
             
-            consistency_bonus = 0
-            if score_std < 0.15:
-                consistency_bonus = 0.07
-
-            # **Cambio clave: Cálculo del puntaje final para un mejor equilibrio**
-            base_confidence = np.mean(sorted_scores[:min(5, len(sorted_scores))])
-            if base_confidence > 0.5:
-                final_confidence = base_confidence + 0.05 + landmark_bonus + consistency_bonus
-            else:
-                final_confidence = base_confidence + landmark_bonus + consistency_bonus
+            # Calcular confianza basada en los mejores matches
+            top_scores = sorted_scores[:min(3, len(sorted_scores))]
+            base_confidence = np.mean(top_scores)
             
-            final_confidence = min(final_confidence, 1.0)
+            # ✅ PENALIZACIÓN POR INCONSISTENCIA
+            score_std = np.std(top_scores) if len(top_scores) > 1 else 0
+            consistency_penalty = min(score_std * 0.5, 0.15)  # Penalizar inconsistencia
             
-            is_match = final_confidence >= self.ADVANCED_CONFIG['min_confidence']
+            # Confianza final MÁS CONSERVADORA
+            final_confidence = base_confidence + landmark_bonus - consistency_penalty
+            final_confidence = max(0.0, min(final_confidence, 1.0))
             
-            details = (f"Score: {final_confidence:.1%}, Matches: {len(all_scores)}, "
-                       f"Consistency: {score_std:.2f}, "
-                       f"Adaptations: {len(adaptation_scores)}")
+            # ✅ DOBLE VERIFICACIÓN CON UMBRALES ESTRICTOS
+            min_confidence = self.ADVANCED_CONFIG['min_confidence']
+            strict_threshold = self.ADVANCED_CONFIG['strict_confidence_threshold']
+            
+            is_match = (
+                final_confidence >= min_confidence and 
+                high_quality_matches >= 1 and
+                len(sorted_scores) >= self.ADVANCED_CONFIG['min_matches']
+            )
+            
+            # ✅ VERIFICACIÓN ULTRA ESTRICTA OPCIONAL
+            if self.ADVANCED_CONFIG['strict_mode'] and final_confidence < strict_threshold:
+                is_match = False
+            
+            details = (f"Confidence: {final_confidence:.1%}, "
+                      f"High quality matches: {high_quality_matches}, "
+                      f"Total matches: {len(all_scores)}, "
+                      f"Consistency: {score_std:.3f}, "
+                      f"Adaptations: {len(adaptation_scores)}")
             
             return is_match, final_confidence, details
             
@@ -575,7 +608,7 @@ class AdvancedFaceRecognitionService:
             return False, 0.0, f"Error de comparación: {str(e)}"
 
     def advanced_verify(self, photo_base64):
-        """Verificación ultra permisiva con múltiples intentos"""
+        """Verificación MÁS ESTRICTA - RECHAZA ROSTROS NO REGISTRADOS"""
         def verify_process():
             try:
                 start_time = time.time()
@@ -596,15 +629,22 @@ class AdvancedFaceRecognitionService:
                 
                 image_array = np.array(image)
                 
+                # ✅ VERIFICACIÓN ESTRICTA DE CALIDAD
                 quality_info = self.detect_image_quality(image_array)
+                if not quality_info['is_acceptable']:
+                    return {
+                        'success': False, 
+                        'error': f'Calidad de imagen insuficiente: {quality_info["overall_quality"]:.1%}'
+                    }
                 
                 enhanced_versions = self.enhance_image_quality(image)
                 
                 face_location = None
                 best_image_array = None
                 
-                for enhanced_img in enhanced_versions:
-                    if time.time() - start_time > self.ADVANCED_CONFIG['verification_timeout'] * 0.6:
+                # ✅ BÚSQUEDA MÁS CUIDADOSA DE ROSTROS
+                for enhanced_img in enhanced_versions[:10]:  # Limitar versiones para ser más rápido
+                    if time.time() - start_time > self.ADVANCED_CONFIG['verification_timeout'] * 0.5:
                         break
                     
                     enhanced_array = np.array(enhanced_img)
@@ -619,40 +659,42 @@ class AdvancedFaceRecognitionService:
                         if face_locations:
                             face_location = face_locations[0]
                             best_image_array = enhanced_array
-                            break
+                            
+                            # ✅ VERIFICAR TAMAÑO DEL ROSTRO DETECTADO
+                            top, right, bottom, left = face_location
+                            face_area = (right - left) * (bottom - top)
+                            if face_area >= self.ADVANCED_CONFIG['face_area_threshold']:
+                                break
+                            else:
+                                face_location = None  # Rostro muy pequeño, seguir buscando
                     except:
                         continue
-                    
-                    if time.time() - start_time < self.ADVANCED_CONFIG['verification_timeout'] * 0.4:
-                        try:
-                            face_locations = face_recognition.face_locations(
-                                enhanced_array,
-                                model="cnn"
-                            )
-                            if face_locations:
-                                face_location = face_locations[0]
-                                best_image_array = enhanced_array
-                                break
-                        except:
-                            continue
                 
                 if not face_location:
-                    return {'success': False, 'error': 'No se detectó rostro en ninguna versión mejorada'}
+                    return {
+                        'success': False, 
+                        'error': 'No se detectó un rostro de tamaño suficiente para verificación segura'
+                    }
                 
+                # ✅ EXTRACCIÓN DE CARACTERÍSTICAS MÁS RIGUROSA
                 current_encoding = face_recognition.face_encodings(
                     best_image_array,
                     [face_location],
-                    num_jitters=3,
+                    num_jitters=5,  # Más jitters para mayor precisión
                     model="large"
                 )
                 
                 if not current_encoding:
-                    return {'success': False, 'error': 'No se pudieron extraer características faciales'}
+                    return {
+                        'success': False, 
+                        'error': 'No se pudieron extraer características faciales confiables'
+                    }
                 
                 current_encoding = current_encoding[0]
                 
+                # Extraer landmarks si hay tiempo
                 current_landmarks = None
-                if time.time() - start_time < self.ADVANCED_CONFIG['verification_timeout'] * 0.7:
+                if time.time() - start_time < self.ADVANCED_CONFIG['verification_timeout'] * 0.6:
                     landmark_data = self.extract_detailed_landmarks(best_image_array)
                     if landmark_data:
                         current_landmarks = landmark_data['points_vector']
@@ -664,10 +706,12 @@ class AdvancedFaceRecognitionService:
                 employees_with_faces = Employee.objects.filter(
                     is_active=True,
                     has_face_registered=True
-                )
+                ).select_related()
+                
+                print(f"🔍 Verificando contra {employees_with_faces.count()} empleados registrados...")
                 
                 for employee in employees_with_faces:
-                    if time.time() - start_time > self.ADVANCED_CONFIG['verification_timeout'] * 0.9:
+                    if time.time() - start_time > self.ADVANCED_CONFIG['verification_timeout'] * 0.85:
                         break
                     
                     try:
@@ -690,6 +734,8 @@ class AdvancedFaceRecognitionService:
                             'details': details
                         })
                         
+                        print(f"   {employee.name}: {confidence:.1%} - {'✅' if is_match else '❌'}")
+                        
                         if is_match and confidence > best_confidence:
                             best_confidence = confidence
                             best_match = employee
@@ -698,13 +744,21 @@ class AdvancedFaceRecognitionService:
                         logger.error(f"Error comparando con {employee.name}: {e}")
                         continue
                 
+                # ✅ LOG DETALLADO DEL RESULTADO
+                if best_match:
+                    print(f"✅ MATCH ENCONTRADO: {best_match.name} con {best_confidence:.1%} de confianza")
+                else:
+                    print(f"❌ NO MATCH: Mejor confianza fue {max([r['confidence'] for r in all_results], default=0):.1%}")
+                    print(f"   Umbral requerido: {self.ADVANCED_CONFIG['min_confidence']:.1%}")
+                
                 return {
                     'success': True,
                     'data': {
                         'best_match': best_match,
                         'best_confidence': best_confidence,
                         'all_results': all_results,
-                        'quality_info': quality_info
+                        'quality_info': quality_info,
+                        'threshold_used': self.ADVANCED_CONFIG['min_confidence']
                     }
                 }
                 
@@ -720,7 +774,7 @@ class AdvancedFaceRecognitionService:
                 return result.get('data'), result.get('error')
             except FutureTimeoutError:
                 future.cancel()
-                return None, "Timeout: La verificación avanzada excedió el tiempo límite."
+                return None, "Timeout: La verificación excedió el tiempo límite de seguridad."
             except Exception as e:
                 logger.error(f"Error en executor: {e}")
                 return None, f"Error en verificación: {str(e)}"
