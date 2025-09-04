@@ -1,28 +1,87 @@
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
+# ==========================================
+# GITIGNORE PRINCIPAL PARA TODO EL PROYECTO
+# ==========================================
+
+# ========== CARPETAS QUE NO DEBEN SUBIRSE ==========
 venv/
 env/
-.env
-.venv
-*.log
-db.sqlite3
-media/
-
-# Node.js / React Native
-node_modules/
 .expo/
-.expo-shared/
-dist/
-build/
-package-lock.json
-
-# IDEs
+node_modules/
 .vscode/
 .idea/
-*.swp
-
-# OS
+__pycache__/
 .DS_Store
+Thumbs.db
+
+# ========== DJANGO BACKEND ==========
+# Base de datos
+attendance-system/attendance_backend/db.sqlite3
+attendance-system/attendance_backend/db.sqlite3-journal
+
+# Archivos Python compilados
+attendance-system/attendance_backend/**/__pycache__/
+attendance-system/attendance_backend/**/*.pyc
+attendance-system/attendance_backend/**/*.pyo
+
+# Media files (fotos de empleados)
+attendance-system/attendance_backend/media/
+attendance-system/attendance_backend/staticfiles/
+
+# Logs Django
+attendance-system/attendance_backend/*.log
+attendance-system/attendance_backend/logs/
+
+# Variables de entorno
+attendance-system/attendance_backend/.env
+
+# ========== REACT NATIVE FRONTEND ==========
+# Dependencies
+AttendanceApp/node_modules/
+
+# Expo
+AttendanceApp/.expo/
+AttendanceApp/dist/
+AttendanceApp/web-build/
+
+# Native builds
+AttendanceApp/android/
+AttendanceApp/ios/
+AttendanceApp/*.orig.*
+AttendanceApp/*.jks
+AttendanceApp/*.p8
+AttendanceApp/*.p12
+AttendanceApp/*.key
+AttendanceApp/*.mobileprovision
+
+# Metro
+AttendanceApp/.metro-health-check*
+
+# Debug
+AttendanceApp/npm-debug.*
+AttendanceApp/yarn-debug.*
+AttendanceApp/yarn-error.*
+
+# TypeScript
+AttendanceApp/*.tsbuildinfo
+
+# ========== CARPETAS ESPECIALES QUE VEO EN TU PROYECTO ==========
+.expo/
+Lib/
+Scripts/
+pyvenv.cfg
+Include/
+
+# ========== ARCHIVOS TEMPORALES ==========
+*.tmp
+*.temp
+*.log
+*.cache
+
+# ========== ARCHIVOS DE SISTEMA ==========
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
 Thumbs.db
